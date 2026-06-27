@@ -29,7 +29,6 @@ services:
   - type: web
     name: noverep
     runtime: static
-    plan: free
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     rootDir: frontend
