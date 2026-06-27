@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply min-h-screen bg-gradient-to-br from-surface via-[#12121a] to-[#0a0a10];
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+  .safe-bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .touch-manipulation {
+    touch-action: manipulation;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-surface-glass backdrop-blur-glass border border-white/10 rounded-xl;
+  }
+  .glass-hover {
+    @apply glass transition-all hover:border-accent/40 hover:bg-white/5;
+  }
+  .btn-primary {
+    @apply px-4 py-2 bg-accent hover:bg-accent-hover rounded-lg font-medium transition-colors;
+  }
+  .btn-ghost {
+    @apply p-2.5 rounded-lg hover:bg-white/10 active:bg-white/15 transition-colors touch-manipulation;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-white/20 rounded-full;
+}

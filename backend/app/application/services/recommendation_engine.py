@@ -1,0 +1,258 @@
+import random
+from datetime import UTC, datetime
+from uuid import UUID
+
+import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.application.services.memory_service import MemoryService
+from app.application.services.song_normalizer import SongNormalizer
+from app.domain.entities import ProviderTrack, RecommendationWeights, ScoredCandidate
+from app.domain.interfaces import MusicProvider
+
+logger = structlog.get_logger()
+
+
+class RecommendationEngine:
+    """
+    Modular pipeline: search → normalize → dedupe → filter → score → sort → randomize.
+    """
+
+    def __init__(
+        self,
+        providers: dict[str, MusicProvider],
+        memory_service: MemoryService,
+        normalizer: SongNormalizer,
+    ):
+        self.providers = providers
+        self.memory = memory_service
+        self.normalizer = normalizer
+
+    async def get_weights(self, session: AsyncSession, user_id: UUID) -> RecommendationWeights:
+        from app.infrastructure.database.models import UserPreferencesModel
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(UserPreferencesModel).where(UserPreferencesModel.user_id == user_id)
+        )
+        prefs = result.scalar_one_or_none()
+        if prefs and prefs.recommendation_weights:
+            w = prefs.recommendation_weights
+            return RecommendationWeights(
+                artist_diversity=w.get("artist_diversity", 1.0),
+                genre_diversity=w.get("genre_diversity", 1.0),
+                album_diversity=w.get("album_diversity", 0.8),
+                language_diversity=w.get("language_diversity", 0.6),
+                year_diversity=w.get("year_diversity", 0.5),
+                popularity=w.get("popularity", 0.7),
+                freshness=w.get("freshness", 0.9),
+                randomness=w.get("randomness", 0.4),
+                time_of_day=w.get("time_of_day", 0.3),
+                history_penalty=w.get("history_penalty", 1.2),
+                session_length=w.get("session_length", 0.2),
+            )
+        return RecommendationWeights()
+
+    async def recommend(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        query: str,
+        provider_name: str = "youtube",
+        limit: int = 20,
+        recent_artists: list[str] | None = None,
+        recent_genres: list[str] | None = None,
+        recent_albums: list[str] | None = None,
+        recent_languages: list[str] | None = None,
+        recent_decades: list[int] | None = None,
+        skip_memory_filter: bool = False,
+        exclude_song_ids: set[UUID] | None = None,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        preferred_languages: list[str] | None = None,
+    ) -> list[ScoredCandidate]:
+        from app.application.services.language_utils import (
+            augment_search_query,
+            filter_tracks_by_language,
+            resolve_languages_from_prefs,
+        )
+        from app.infrastructure.database.models import UserPreferencesModel
+        from sqlalchemy import select
+
+        recent_artists = recent_artists or []
+        recent_genres = recent_genres or []
+        recent_albums = recent_albums or []
+        recent_languages = recent_languages or []
+        recent_decades = recent_decades or []
+
+        provider = self.providers.get(provider_name)
+        if not provider:
+            return []
+
+        if preferred_languages is None:
+            pref_result = await session.execute(
+                select(UserPreferencesModel).where(UserPreferencesModel.user_id == user_id)
+            )
+            pref = pref_result.scalar_one_or_none()
+            preferred_languages = resolve_languages_from_prefs(pref)
+
+        search_query = augment_search_query(query, preferred_languages)
+
+        # 1. Search
+        candidates = await provider.search(search_query, limit=limit * 3)
+
+        # 2. Normalize & resolve canonical IDs
+        for track in candidates:
+            song = await self.normalizer.resolve_canonical(track, session)
+            track.canonical_song_id = song.id
+
+        # 3. Remove duplicates (same canonical song)
+        seen: set[UUID] = set()
+        unique: list[ProviderTrack] = []
+        for track in candidates:
+            if track.canonical_song_id and track.canonical_song_id not in seen:
+                seen.add(track.canonical_song_id)
+                unique.append(track)
+
+        # 4. Memory filter – remove blocked songs (unless include heard / allow replays)
+        if skip_memory_filter:
+            filtered = unique
+        else:
+            blocked = await self.memory.get_blocked_song_ids(session, user_id)
+            filtered = [t for t in unique if t.canonical_song_id not in blocked]
+
+        # 5. Block lists from preferences
+        filtered = await self._apply_user_blocks(session, user_id, filtered)
+
+        # 5a. Language preference filter
+        filtered = filter_tracks_by_language(filtered, preferred_languages)
+
+        # 5b. Exclude playlist songs from discovery
+        if exclude_song_ids:
+            filtered = [
+                t
+                for t in filtered
+                if not t.canonical_song_id or t.canonical_song_id not in exclude_song_ids
+            ]
+
+        # 5c. Year range filter
+        if year_from or year_to:
+            y_min = year_from or 1900
+            y_max = year_to or 2100
+            in_range = [
+                t
+                for t in filtered
+                if t.release_year is None or (y_min <= t.release_year <= y_max)
+            ]
+            if in_range:
+                filtered = in_range
+
+        # 6. Score
+        weights = await self.get_weights(session, user_id)
+        scored = [
+            self._score_track(
+                track,
+                weights,
+                recent_artists,
+                recent_genres,
+                recent_albums,
+                recent_languages,
+                recent_decades,
+            )
+            for track in filtered
+        ]
+
+        # 7. Sort
+        scored.sort(key=lambda c: c.score, reverse=True)
+
+        # 8. Randomize – heavy shuffle for surprise discovery
+        if len(scored) > 1:
+            random.shuffle(scored)
+
+        return scored[:limit]
+
+    async def _apply_user_blocks(
+        self, session: AsyncSession, user_id: UUID, tracks: list[ProviderTrack]
+    ) -> list[ProviderTrack]:
+        from app.infrastructure.database.models import UserPreferencesModel
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(UserPreferencesModel).where(UserPreferencesModel.user_id == user_id)
+        )
+        prefs = result.scalar_one_or_none()
+        if not prefs:
+            return tracks
+
+        blocked_artists = {a.lower() for a in (prefs.blocked_artists or [])}
+        blocked_albums = {a.lower() for a in (prefs.blocked_albums or [])}
+        blocked_songs = {s.lower() for s in (prefs.blocked_songs or [])}
+
+        return [
+            t
+            for t in tracks
+            if t.artist.lower() not in blocked_artists
+            and (not t.album or t.album.lower() not in blocked_albums)
+            and t.title.lower() not in blocked_songs
+        ]
+
+    def _score_track(
+        self,
+        track: ProviderTrack,
+        weights: RecommendationWeights,
+        recent_artists: list[str],
+        recent_genres: list[str],
+        recent_albums: list[str],
+        recent_languages: list[str],
+        recent_decades: list[int],
+    ) -> ScoredCandidate:
+        reasons: dict[str, float] = {}
+        score = 0.0
+
+        # Artist diversity
+        if track.artist.lower() in [a.lower() for a in recent_artists[-3:]]:
+            reasons["artist_penalty"] = -weights.artist_diversity * 2.0
+        else:
+            reasons["artist_bonus"] = weights.artist_diversity * 0.5
+
+        # Genre diversity
+        genre = track.genre or "unknown"
+        if genre.lower() in [g.lower() for g in recent_genres[-3:]]:
+            reasons["genre_penalty"] = -weights.genre_diversity * 1.5
+        else:
+            reasons["genre_bonus"] = weights.genre_diversity * 0.4
+
+        # Album diversity
+        if track.album and track.album.lower() in [a.lower() for a in recent_albums[-2:]]:
+            reasons["album_penalty"] = -weights.album_diversity * 1.2
+
+        # Language diversity
+        lang = track.language or "unknown"
+        if lang.lower() in [l.lower() for l in recent_languages[-3:]]:
+            reasons["language_penalty"] = -weights.language_diversity
+
+        # Decade diversity
+        if track.release_year:
+            decade = (track.release_year // 10) * 10
+            if decade in recent_decades[-3:]:
+                reasons["decade_penalty"] = -weights.year_diversity
+
+        # Popularity & freshness
+        reasons["popularity"] = track.popularity * weights.popularity * 0.1
+        if track.release_year:
+            age = datetime.now(UTC).year - track.release_year
+            freshness = max(0, 1 - age / 50) * weights.freshness
+            reasons["freshness"] = freshness
+
+        # Time of day (placeholder heuristic)
+        hour = datetime.now(UTC).hour
+        if 6 <= hour < 12:
+            reasons["time_of_day"] = weights.time_of_day * 0.2
+        elif 18 <= hour < 24:
+            reasons["time_of_day"] = weights.time_of_day * 0.3
+
+        # Randomness
+        reasons["randomness"] = random.random() * weights.randomness
+
+        score = sum(reasons.values())
+        return ScoredCandidate(track=track, score=score, reasons=reasons)

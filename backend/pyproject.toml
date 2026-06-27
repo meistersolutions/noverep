@@ -1,0 +1,14 @@
+[project]
+name = "noverep-backend"
+version = "1.0.0"
+description = "Never-repeat intelligent music player API"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
