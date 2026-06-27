@@ -44,14 +44,10 @@ Use a [GitHub Personal Access Token](https://github.com/settings/tokens) as the 
 1. Open https://console.neon.tech → **New Project**
 2. Name: `noverep`, region: closest to you
 3. Open **Connection details** → copy the **connection string**
-4. Change the scheme for this app:
+4. Copy the **connection string** and paste it into Render as `DATABASE_URL`  
+   (You can use Neon’s default `postgresql://...?sslmode=require` — the app fixes it automatically.)
 
-   **From:** `postgresql://user:pass@host/db?sslmode=require`  
-   **To:** `postgresql+asyncpg://user:pass@host/db?ssl=require`
-
-   (Replace `postgresql://` with `postgresql+asyncpg://` — keep `?ssl=require`.)
-
-Save this as `DATABASE_URL` — you will paste it into Render in Step 4.
+Save this — you will paste it into Render in Step 4.
 
 ---
 
@@ -103,7 +99,7 @@ Visit: **https://noverep.onrender.com**
 |---------|-----|
 | API slow first time | Normal on free tier — wait 30–60s, refresh |
 | `CORS` error in browser console | Fix `CORS_ORIGINS` on API to match frontend URL exactly |
-| `database unhealthy` on `/health` | Check `DATABASE_URL` uses `postgresql+asyncpg://` and `ssl=require` |
+| `database unhealthy` on `/health` | Check `DATABASE_URL` is the Neon connection string; redeploy after env changes |
 | Search returns nothing | yt-dlp may be rate-limited; try again in a minute |
 | Build failed on Render | Open **Logs** on `noverep-api` — often out of memory on first build; retry deploy |
 
