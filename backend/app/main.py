@@ -120,6 +120,18 @@ async def value_error_handler(_: Request, exc: ValueError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.get("/")
+async def root():
+    return {
+        "app": settings.app_name,
+        "message": "This is the NoRepeat API. Open the web app URL to play music.",
+        "web_app": "https://noverep.onrender.com",
+        "health": "/health",
+        "api": settings.api_prefix,
+        "docs": "/docs",
+    }
+
+
 @app.get("/health")
 @limiter.limit("30/minute")
 async def health(request: Request):

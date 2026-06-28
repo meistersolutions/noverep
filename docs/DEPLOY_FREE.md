@@ -85,6 +85,15 @@ If you renamed services in Render, update `VITE_API_URL` on the static site to m
 
 ## Step 5 — Open the app
 
+**Use the frontend URL (not the API):**
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **Web app** | **https://noverep.onrender.com** | Open this in your browser to play music |
+| API only | https://noverep-api.onrender.com | Backend JSON — `/` alone returns API info |
+| Health check | https://noverep-api.onrender.com/health | Verify database is connected |
+| API docs | https://noverep-api.onrender.com/docs | Swagger UI |
+
 Visit: **https://noverep.onrender.com**
 
 1. Click **Continue as Guest** (or register)

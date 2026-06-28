@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from app.application.dto.schemas import (
 )
 from app.application.services.home_recommendations import HomeRecommendationService
 from app.application.services.memory_service import MemoryService
+from app.application.tasks.queue_tasks import run_queue_sync_background
 from app.application.services.playlist_service import PlaylistService
 from app.application.services.queue_service import QueueService
 from app.application.services.recommendation_engine import RecommendationEngine
@@ -240,11 +241,14 @@ async def add_to_queue(
 @router.post("/queue/next", response_model=QueueItemResponse | None)
 async def queue_next(
     seed: str | None = None,
+    background_tasks: BackgroundTasks,
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     queue_svc: QueueService = Depends(get_queue_service),
 ):
-    item = await queue_svc.next_track(session, user.id, seed_query=seed)
+    item = await queue_svc.next_track(session, user.id, seed_query=seed, defer_sync=True)
+    if item and not await queue_svc._is_playlist_mode(session, user.id):
+        background_tasks.add_task(run_queue_sync_background, user.id)
     if not item:
         return None
     return QueueItemResponse(

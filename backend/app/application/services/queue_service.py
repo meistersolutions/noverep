@@ -572,6 +572,8 @@ class QueueService:
         session: AsyncSession,
         user_id: UUID,
         seed_query: str | None = None,
+        *,
+        defer_sync: bool = False,
     ) -> QueueItemModel | None:
         queue = await self.get_queue(session, user_id)
         if not queue:
@@ -604,6 +606,9 @@ class QueueService:
 
         await session.flush()
         current_item = queue[new_current_idx]
+
+        if defer_sync:
+            return current_item
 
         if not await self._is_playlist_mode(session, user_id):
             await self.sync_queue(session, user_id)

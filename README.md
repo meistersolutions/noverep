@@ -113,6 +113,10 @@ cd backend && pytest
 cd frontend && npm test
 ```
 
+## Free cloud hosting (no home PC)
+
+See **[docs/DEPLOY_FREE.md](docs/DEPLOY_FREE.md)** — deploy to **Render + Neon** (free tier) using the included `render.yaml` blueprint.
+
 ## API Highlights
 
 | Endpoint              | Description                |
