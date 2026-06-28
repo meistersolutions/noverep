@@ -2,18 +2,9 @@ import { useEffect, useState } from 'react';
 import { api, UserPreferences } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { LanguageMultiSelect } from '@/components/LanguageMultiSelect';
+import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
 import { effectiveLanguages, languageLabels } from '@/lib/languages';
-
-const MEMORY_WINDOWS = [
-  { value: '1d', label: '1 day' },
-  { value: '7d', label: '7 days' },
-  { value: '15d', label: '15 days' },
-  { value: '30d', label: '30 days' },
-  { value: '60d', label: '60 days' },
-  { value: '90d', label: '90 days' },
-  { value: '365d', label: '1 year' },
-  { value: 'forever', label: 'Forever' },
-];
+import { MEMORY_WINDOWS } from '@/lib/preferenceOptions';
 
 const WEIGHT_LABELS: Record<string, string> = {
   artist_diversity: 'Artist Diversity',
@@ -105,40 +96,13 @@ export default function SettingsPage() {
         <p className="text-sm text-white/50">
           Limit discovery to songs from a specific year range. Leave blank for any year.
         </p>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="space-y-1">
-            <span className="text-sm text-white/60">From year</span>
-            <input
-              type="number"
-              min={1950}
-              max={2100}
-              placeholder="e.g. 2010"
-              value={prefs.discovery_year_from ?? ''}
-              onChange={(e) =>
-                save({
-                  discovery_year_from: e.target.value ? Number(e.target.value) : null,
-                })
-              }
-              className="w-full bg-surface-raised border border-white/10 rounded-lg px-4 py-2"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-sm text-white/60">To year</span>
-            <input
-              type="number"
-              min={1950}
-              max={2100}
-              placeholder="e.g. 2020"
-              value={prefs.discovery_year_to ?? ''}
-              onChange={(e) =>
-                save({
-                  discovery_year_to: e.target.value ? Number(e.target.value) : null,
-                })
-              }
-              className="w-full bg-surface-raised border border-white/10 rounded-lg px-4 py-2"
-            />
-          </label>
-        </div>
+        <DiscoveryYearRangeInput
+          yearFrom={prefs.discovery_year_from}
+          yearTo={prefs.discovery_year_to}
+          onSave={(discovery_year_from, discovery_year_to) =>
+            save({ discovery_year_from, discovery_year_to })
+          }
+        />
       </section>
 
       <section className="glass p-6 space-y-4">

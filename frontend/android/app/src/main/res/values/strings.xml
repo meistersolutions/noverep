@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NoRepeat</string>
+    <string name="title_activity_main">NoRepeat</string>
+    <string name="package_name">com.noverep.app</string>
+    <string name="custom_url_scheme">com.noverep.app</string>
+</resources>

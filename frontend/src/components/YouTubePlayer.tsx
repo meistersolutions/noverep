@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { usePlayerStore } from '@/stores/playerStore';
 import {
   getPlayer,
@@ -127,11 +128,32 @@ export function YouTubePlayer() {
     return () => clearInterval(id);
   }, [setCurrentTime, setDuration]);
 
+  const isNative = Capacitor.isNativePlatform();
+
   return (
     <div
       aria-hidden
       className="pointer-events-none fixed overflow-hidden"
-      style={{ width: 1, height: 1, opacity: 0.01, left: 0, bottom: 0, zIndex: 0 }}
+      style={
+        isNative
+          ? {
+              // iOS/Android WebViews may pause zero-size iframes; keep a real player off-screen.
+              width: 320,
+              height: 180,
+              opacity: 0.01,
+              left: -9999,
+              top: 0,
+              zIndex: 0,
+            }
+          : {
+              width: 1,
+              height: 1,
+              opacity: 0.01,
+              left: 0,
+              bottom: 0,
+              zIndex: 0,
+            }
+      }
     >
       <div id={CONTAINER_ID} />
     </div>

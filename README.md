@@ -27,6 +27,7 @@ docker compose up --build
 - **Cross-Provider Songs** – Canonical song entity maps YouTube, Spotify, Apple Music, local files
 - **Intelligent Queue** – Next track auto-discovered when queue is exhausted
 - **YouTube Playback** – Search & play via yt-dlp + YouTube IFrame API
+- **Native mobile app (Capacitor)** – Android/iOS shell for background playback when screen is off — see [docs/CAPACITOR.md](docs/CAPACITOR.md)
 - **JWT Auth** – Guest mode, registration, Google OAuth (optional)
 - **Statistics Dashboard** – Discovery score, streaks, heatmaps, top artists/genres
 
@@ -135,7 +136,8 @@ See **[docs/DEPLOY_FREE.md](docs/DEPLOY_FREE.md)** — deploy to **Render + Neon
 - [ ] Audio fingerprinting (AcoustID)
 - [ ] MusicBrainz ISRC lookup
 - [ ] Collaborative filtering / ML recommendations
-- [ ] Offline mode, mobile & desktop apps
+- [ ] Offline mode, desktop apps
+- [x] Mobile app shell (Capacitor) — see [docs/CAPACITOR.md](docs/CAPACITOR.md)
 - [ ] CarPlay / Android Auto
 - [ ] Podcast support
 

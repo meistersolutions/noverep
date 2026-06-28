@@ -1,7 +1,12 @@
 import { resumePlayback } from '@/lib/youtubePlayerController';
+import { isNativeApp } from '@/lib/nativePlatform';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let wakeLock: WakeLockSentinel | null = null;
+let appStateListener: { remove: () => void } | null = null;
+
+/** Native shells suspend WebViews aggressively — retry more often. */
+const KEEP_ALIVE_MS = isNativeApp ? 500 : 1000;
 
 async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
@@ -22,13 +27,19 @@ async function releaseWakeLock() {
   }
 }
 
+function resumeIfPlaying(getIsPlaying: () => boolean) {
+  if (getIsPlaying()) {
+    resumePlayback();
+  }
+}
+
 function startKeepAlive(getIsPlaying: () => boolean) {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => {
     if (getIsPlaying() && document.hidden) {
       resumePlayback();
     }
-  }, 1000);
+  }, KEEP_ALIVE_MS);
 }
 
 function stopKeepAlive() {
@@ -38,7 +49,28 @@ function stopKeepAlive() {
   }
 }
 
+async function bindCapacitorAppState(getIsPlaying: () => boolean) {
+  if (!isNativeApp || appStateListener) return;
+
+  try {
+    const { App } = await import('@capacitor/app');
+    appStateListener = await App.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) {
+        resumeIfPlaying(getIsPlaying);
+        stopKeepAlive();
+      } else if (getIsPlaying()) {
+        resumePlayback();
+        startKeepAlive(getIsPlaying);
+      }
+    });
+  } catch {
+    /* plugin unavailable */
+  }
+}
+
 export function initBackgroundPlayback(getIsPlaying: () => boolean) {
+  void bindCapacitorAppState(getIsPlaying);
+
   const onVisibility = () => {
     if (document.hidden) {
       if (getIsPlaying()) {
@@ -48,15 +80,11 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
       }
     } else {
       stopKeepAlive();
-      if (getIsPlaying()) {
-        resumePlayback();
-      }
+      resumeIfPlaying(getIsPlaying);
     }
   };
 
-  const onPageShow = () => {
-    if (getIsPlaying()) resumePlayback();
-  };
+  const onPageShow = () => resumeIfPlaying(getIsPlaying);
 
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pageshow', onPageShow);
@@ -68,6 +96,8 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
     window.removeEventListener('focus', onPageShow);
     stopKeepAlive();
     releaseWakeLock();
+    appStateListener?.remove();
+    appStateListener = null;
   };
 }
 
@@ -75,6 +105,7 @@ export function onPlaybackStateChange(isPlaying: boolean, getIsPlaying: () => bo
   if (isPlaying) {
     requestWakeLock();
     if (document.hidden) startKeepAlive(getIsPlaying);
+    if (isNativeApp) resumePlayback();
   } else {
     stopKeepAlive();
     releaseWakeLock();

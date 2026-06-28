@@ -6,6 +6,7 @@ import { api, Track } from '@/lib/api';
 import { SongCard, SongCardSkeleton } from '@/components/SongCard';
 import { MobileHeader } from '@/components/MobileHeader';
 import { DiscoverModeToggle, useDiscoverOnly } from '@/components/DiscoverModeToggle';
+import { SearchPreferencesPanel } from '@/components/SearchPreferencesPanel';
 import { QueueSection } from '@/components/QueueSection';
 import { usePlayerStore } from '@/stores/playerStore';
 
@@ -168,6 +169,14 @@ export default function SearchPage() {
           ? 'Discover mode: hiding songs you heard recently. Search locks the queue to your query.'
           : 'All songs mode. Search locks upcoming queue tracks to your query until cleared.'}
       </p>
+
+      <SearchPreferencesPanel
+        onPreferencesSaved={() => {
+          if (!activeSearch) {
+            void refreshQueueFromPreferences();
+          }
+        }}
+      />
 
       <QueueSection onRefreshPreferences={handleRefreshPreferences} refreshing={refreshing} />
 

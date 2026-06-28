@@ -73,3 +73,7 @@ npm run dev -- --host 0.0.0.0
 ```
 
 Set `VITE_API_URL=http://192.168.1.42:8000/api/v1` in `frontend/.env.local` and rebuild/restart.
+
+## Native app (better background audio)
+
+For playback with the screen off, use the **Capacitor** Android/iOS app instead of the mobile browser. See **[docs/CAPACITOR.md](CAPACITOR.md)**.
