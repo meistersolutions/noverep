@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api, QueueItem, Track, UserPreferences } from '@/lib/api';
 import { recordPlayProgress, recordPlayStart } from '@/lib/playbackHistory';
-import { setWantPlaying } from '@/lib/youtubePlayerController';
+import { setWantPlaying, prepareTrackTransition } from '@/lib/youtubePlayerController';
 
 function ensureSessionId(): string {
   const key = 'noverep_session';
@@ -18,6 +18,57 @@ function localNextInQueue(queue: QueueItem[]): QueueItem | null {
     return queue[currentIdx + 1];
   }
   return null;
+}
+
+/** Keep queue flags in sync with what the client is actually playing. */
+function alignQueueWithCurrentTrack(
+  queue: QueueItem[],
+  currentTrack: QueueItem | Track | null,
+): QueueItem[] {
+  if (!currentTrack) return queue;
+  const id = currentTrack.provider_track_id;
+  return queue.map((q) => ({ ...q, is_current: q.provider_track_id === id }));
+}
+
+/** Merge server queue row into client track without replacing a newer in-flight track. */
+function mergeCurrentTrackFromQueue(
+  queue: QueueItem[],
+  currentTrack: QueueItem | Track | null,
+  isPlaying: boolean,
+): QueueItem | Track | null {
+  const fromQueue = queue.find((q) => q.is_current);
+  if (!currentTrack) {
+    return fromQueue ?? queue[0] ?? null;
+  }
+  if (!isPlaying && fromQueue) {
+    return fromQueue;
+  }
+  const clientId = currentTrack.provider_track_id;
+  const serverId = fromQueue?.provider_track_id;
+  if (serverId && serverId !== clientId) {
+    // Client advanced optimistically — server queue may still show the previous song.
+    return currentTrack;
+  }
+  const match = queue.find((q) => q.provider_track_id === clientId);
+  if (match) {
+    return {
+      ...match,
+      thumbnail_url: match.thumbnail_url || currentTrack.thumbnail_url,
+    };
+  }
+  return currentTrack;
+}
+
+function applyQueueSnapshot(
+  queue: QueueItem[],
+  currentTrack: QueueItem | Track | null,
+  isPlaying: boolean,
+): { queue: QueueItem[]; currentTrack: QueueItem | Track | null } {
+  const merged = mergeCurrentTrackFromQueue(queue, currentTrack, isPlaying);
+  return {
+    queue: alignQueueWithCurrentTrack(queue, merged),
+    currentTrack: merged,
+  };
 }
 
 async function prefetchUpcoming(queue: QueueItem[]) {
@@ -158,12 +209,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     try {
       const queue = await api.syncQueue();
       const { currentTrack, isPlaying } = get();
-      const fromQueue = queue.find((q) => q.is_current);
-      set({
-        queue,
-        currentTrack: isPlaying ? currentTrack ?? fromQueue ?? queue[0] : fromQueue ?? currentTrack,
-      });
-      void prefetchUpcoming(queue);
+      set(applyQueueSnapshot(queue, currentTrack, isPlaying));
+      void prefetchUpcoming(get().queue);
     } catch {
       /* best-effort */
     }
@@ -173,10 +220,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (get().playbackMode === 'playlist') return;
     const queue = await api.refreshQueue(query);
     const { currentTrack, isPlaying } = get();
-    const fromQueue = queue.find((q) => q.is_current);
     set({
-      queue,
-      currentTrack: isPlaying ? currentTrack ?? fromQueue ?? queue[0] : fromQueue ?? currentTrack,
+      ...applyQueueSnapshot(queue, currentTrack, isPlaying),
       preferences: get().preferences
         ? { ...get().preferences!, active_search_query: query.trim() }
         : get().preferences,
@@ -187,10 +232,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (get().playbackMode === 'playlist') return;
     const queue = await api.refreshQueueFromPreferences();
     const { currentTrack, isPlaying } = get();
-    const fromQueue = queue.find((q) => q.is_current);
     set({
-      queue,
-      currentTrack: isPlaying ? currentTrack ?? fromQueue ?? queue[0] : fromQueue ?? currentTrack,
+      ...applyQueueSnapshot(queue, currentTrack, isPlaying),
       preferences: get().preferences
         ? { ...get().preferences!, active_search_query: null }
         : get().preferences,
@@ -299,6 +342,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const optimistic = localNextInQueue(queue);
 
     const playItem = (item: QueueItem, optimisticQueue?: QueueItem[]) => {
+      prepareTrackTransition();
       const updatedQueue =
         optimisticQueue ??
         get().queue.map((q) => ({ ...q, is_current: q.id === item.id }));
@@ -403,15 +447,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   refreshQueue: async () => {
     const queue = await api.getQueue();
     const { currentTrack, isPlaying } = get();
-    const fromQueue = queue.find((q) => q.is_current);
-    let current = currentTrack;
-    if (fromQueue) {
-      current = fromQueue;
-    } else if (!currentTrack && queue.length > 0) {
-      current = queue[0];
-    }
-    set({ queue, currentTrack: isPlaying ? currentTrack ?? current : current });
-    void prefetchUpcoming(queue);
+    set(applyQueueSnapshot(queue, currentTrack, isPlaying));
+    void prefetchUpcoming(get().queue);
   },
 
   loadPreferences: async () => {

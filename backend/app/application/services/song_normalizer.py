@@ -13,6 +13,11 @@ from app.infrastructure.database.models import (
     ProviderModel,
     SongModel,
 )
+from app.infrastructure.providers.youtube.metadata_utils import (
+    is_placeholder_youtube_title,
+    pick_display_artist,
+    pick_display_title,
+)
 
 
 def _normalize_text(text: str) -> str:
@@ -34,12 +39,19 @@ class SongNormalizer(SongNormalizerPort):
         return sha256(base.encode()).hexdigest()[:32]
 
     async def resolve_canonical(self, track: ProviderTrack, session: AsyncSession) -> SongModel:
+        song = await self._find_by_provider_track(session, track)
+        if song:
+            await self._upgrade_song_metadata(session, song, track)
+            await self._ensure_provider_mapping(session, song, track)
+            return song
+
         norm_key = self.normalize_key(track.title, track.artist, track.duration_seconds)
 
         result = await session.execute(select(SongModel).where(SongModel.normalization_key == norm_key))
         song = result.scalar_one_or_none()
 
         if song:
+            await self._upgrade_song_metadata(session, song, track)
             await self._ensure_provider_mapping(session, song, track)
             return song
 
@@ -68,6 +80,40 @@ class SongNormalizer(SongNormalizerPort):
         await self._ensure_provider_mapping(session, song, track)
         return song
 
+    async def _find_by_provider_track(
+        self, session: AsyncSession, track: ProviderTrack
+    ) -> SongModel | None:
+        result = await session.execute(
+            select(SongModel)
+            .join(ProviderMappingModel, ProviderMappingModel.song_id == SongModel.id)
+            .join(ProviderModel, ProviderModel.id == ProviderMappingModel.provider_id)
+            .where(
+                ProviderModel.name == track.provider,
+                ProviderMappingModel.provider_track_id == track.provider_track_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _upgrade_song_metadata(
+        self, session: AsyncSession, song: SongModel, track: ProviderTrack
+    ) -> None:
+        new_title = pick_display_title(track.title, song.title)
+        if new_title != song.title and (
+            is_placeholder_youtube_title(song.title) or not is_placeholder_youtube_title(new_title)
+        ):
+            song.title = new_title
+            song.normalized_title = _normalize_text(new_title)
+
+        artist_result = await session.execute(select(ArtistModel).where(ArtistModel.id == song.artist_id))
+        artist = artist_result.scalar_one()
+        new_artist = pick_display_artist(track.artist, artist.name)
+        if new_artist != artist.name and (
+            artist.name.lower() in ("unknown", "unknown artist")
+            or is_placeholder_youtube_title(artist.name)
+        ):
+            artist.name = new_artist
+            artist.normalized_name = _normalize_text(new_artist)
+
     async def _ensure_provider_mapping(
         self, session: AsyncSession, song: SongModel, track: ProviderTrack
     ) -> None:
@@ -86,7 +132,8 @@ class SongNormalizer(SongNormalizerPort):
                 ProviderMappingModel.provider_track_id == track.provider_track_id,
             )
         )
-        if not mapping_result.scalar_one_or_none():
+        mapping = mapping_result.scalar_one_or_none()
+        if not mapping:
             session.add(
                 ProviderMappingModel(
                     song_id=song.id,
@@ -95,3 +142,5 @@ class SongNormalizer(SongNormalizerPort):
                     thumbnail_url=track.thumbnail_url,
                 )
             )
+        elif track.thumbnail_url and not mapping.thumbnail_url:
+            mapping.thumbnail_url = track.thumbnail_url

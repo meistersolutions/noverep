@@ -55,12 +55,20 @@ from app.infrastructure.database.models import (
     FeedbackModel,
     ListeningHistoryModel,
     PlaylistModel,
+    ProviderMappingModel,
+    ProviderModel,
     SessionModel,
     SongModel,
     UserModel,
     UserPreferencesModel,
 )
 from app.infrastructure.database.session import get_db_session
+from app.infrastructure.providers.youtube.metadata_utils import (
+    fetch_oembed_metadata,
+    is_placeholder_youtube_title,
+    pick_display_artist,
+    pick_display_title,
+)
 
 router = APIRouter()
 
@@ -460,12 +468,31 @@ async def record_playback(
         )
         await session.flush()
 
-    # Resolve song – prefer metadata but fall back to request body (faster, more reliable)
+    # Resolve song – merge provider metadata with client title/artist (yt-dlp on cloud often returns placeholders)
     from app.domain.entities import ProviderTrack
 
     try:
-        track = await provider.get_metadata(body.provider_track_id)
+        fetched = await provider.get_metadata(body.provider_track_id)
     except Exception:
+        fetched = None
+
+    if fetched:
+        track = ProviderTrack(
+            provider=fetched.provider,
+            provider_track_id=fetched.provider_track_id,
+            title=pick_display_title(fetched.title, body.title),
+            artist=pick_display_artist(fetched.artist, body.artist),
+            album=fetched.album or body.album,
+            duration_seconds=fetched.duration_seconds,
+            thumbnail_url=fetched.thumbnail_url,
+            stream_url=fetched.stream_url,
+            genre=body.genre or fetched.genre,
+            language=fetched.language,
+            release_year=fetched.release_year,
+            isrc=fetched.isrc,
+            popularity=fetched.popularity,
+        )
+    else:
         track = ProviderTrack(
             provider=body.provider,
             provider_track_id=body.provider_track_id,
@@ -502,9 +529,23 @@ async def get_history(
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    from sqlalchemy.orm import aliased
+
+    youtube_mapping = aliased(ProviderMappingModel)
+    youtube_provider_ids = select(ProviderModel.id).where(ProviderModel.name == "youtube")
+
     result = await session.execute(
-        select(ListeningHistoryModel, SongModel.title)
+        select(
+            ListeningHistoryModel,
+            SongModel.title,
+            youtube_mapping.provider_track_id,
+        )
         .join(SongModel, ListeningHistoryModel.song_id == SongModel.id)
+        .outerjoin(
+            youtube_mapping,
+            (youtube_mapping.song_id == SongModel.id)
+            & youtube_mapping.provider_id.in_(youtube_provider_ids),
+        )
         .where(ListeningHistoryModel.user_id == user.id)
         .order_by(ListeningHistoryModel.played_at.desc())
         .limit(limit)
@@ -512,14 +553,23 @@ async def get_history(
     rows = result.all()
     seen_songs: set[UUID] = set()
     entries: list[HistoryEntryResponse] = []
-    for h, title in rows:
+    oembed_cache: dict[str, tuple[str, str]] = {}
+    for h, title, video_id in rows:
         if h.song_id in seen_songs:
             continue
         seen_songs.add(h.song_id)
+        display_title = title
+        if is_placeholder_youtube_title(display_title) and video_id:
+            if video_id not in oembed_cache:
+                meta = fetch_oembed_metadata(video_id)
+                oembed_cache[video_id] = meta if meta else ("", "")
+            oembed_title, _ = oembed_cache[video_id]
+            if oembed_title:
+                display_title = oembed_title
         entries.append(
             HistoryEntryResponse(
                 id=h.id,
-                title=title,
+                title=display_title,
                 artist=h.artist_name,
                 album=h.album_name,
                 genre=h.genre_name,

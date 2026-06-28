@@ -12,6 +12,12 @@ from app.infrastructure.providers.youtube.song_filter import (
     is_single_song_track,
     normalize_search_query,
 )
+from app.infrastructure.providers.youtube.metadata_utils import (
+    fetch_oembed_metadata,
+    is_placeholder_youtube_title,
+    pick_display_artist,
+    pick_display_title,
+)
 
 logger = structlog.get_logger()
 
@@ -87,17 +93,49 @@ class YouTubeProvider(MusicProvider):
             with yt_dlp.YoutubeDL(self._ydl_opts(extract_flat=False)) as ydl:
                 info = ydl.extract_info(url, download=False)
                 track = self._entry_to_track(info, full=True)
-                if track:
+                if track and not is_placeholder_youtube_title(track.title):
                     return track
         except Exception as e:
             logger.warning("youtube_metadata_full_failed", video_id=provider_track_id, error=str(e))
 
-        with yt_dlp.YoutubeDL(self._ydl_opts(extract_flat=True)) as ydl:
-            info = ydl.extract_info(url, download=False)
-            track = self._entry_to_track(info, full=True)
-            if not track:
-                raise ValueError(f"Could not fetch metadata for {provider_track_id}")
-            return track
+        oembed = fetch_oembed_metadata(provider_track_id)
+        if oembed:
+            title, artist = oembed
+            return ProviderTrack(
+                provider="youtube",
+                provider_track_id=provider_track_id,
+                title=title,
+                artist=artist,
+                album=None,
+                duration_seconds=None,
+                thumbnail_url=f"https://i.ytimg.com/vi/{provider_track_id}/hqdefault.jpg",
+                stream_url=url,
+            )
+
+        try:
+            with yt_dlp.YoutubeDL(self._ydl_opts(extract_flat=True)) as ydl:
+                info = ydl.extract_info(url, download=False)
+                track = self._entry_to_track(info, full=True)
+                if track and not is_placeholder_youtube_title(track.title):
+                    return track
+        except Exception as e:
+            logger.warning("youtube_metadata_flat_failed", video_id=provider_track_id, error=str(e))
+
+        if oembed:
+            title, artist = oembed
+        else:
+            title, artist = f"YouTube video {provider_track_id}", "Unknown Artist"
+
+        return ProviderTrack(
+            provider="youtube",
+            provider_track_id=provider_track_id,
+            title=title,
+            artist=artist,
+            album=None,
+            duration_seconds=None,
+            thumbnail_url=f"https://i.ytimg.com/vi/{provider_track_id}/hqdefault.jpg",
+            stream_url=url,
+        )
 
     def _entry_to_track(self, entry: dict, full: bool = False) -> ProviderTrack | None:
         video_id = entry.get("id")

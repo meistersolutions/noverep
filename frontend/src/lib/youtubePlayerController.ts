@@ -70,6 +70,11 @@ export function getPlayer(): YTPlayerInstance | null {
   return player;
 }
 
+export function prepareTrackTransition() {
+  wantPlaying = true;
+  ignoreEndedUntil = Date.now() + 4000;
+}
+
 export function setWantPlaying(playing: boolean) {
   wantPlaying = playing;
 }

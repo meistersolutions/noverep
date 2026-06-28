@@ -11,16 +11,12 @@ export default function NowPlayingPage() {
   const currentTime = usePlayerStore((s) => s.currentTime);
   const duration = usePlayerStore((s) => s.duration);
   const setPlaying = usePlayerStore((s) => s.setPlaying);
-  const queue = usePlayerStore((s) => s.queue);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [liked, setLiked] = useState(false);
   const [liking, setLiking] = useState(false);
 
-  const track =
-    currentTrack ||
-    queue.find((q) => q.is_current) ||
-    (queue.length > 0 ? queue[queue.length - 1] : null);
+  const track = currentTrack;
 
   useEffect(() => {
     if (!track?.provider_track_id) {

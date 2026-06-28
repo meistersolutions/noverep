@@ -106,10 +106,12 @@ export function QueueSection({ onRefreshPreferences, refreshing = false }: Queue
   const [playlistTrack, setPlaylistTrack] = useState<QueueItem | null>(null);
   const playlistMode = playbackMode === 'playlist';
 
-  const currentIdx = queue.findIndex(
-    (q) => q.is_current || q.provider_track_id === currentTrack?.provider_track_id,
-  );
-  const nowPlaying = currentIdx >= 0 ? queue[currentIdx] : currentTrack;
+  const currentIdx = currentTrack
+    ? queue.findIndex((q) => q.provider_track_id === currentTrack.provider_track_id)
+    : queue.findIndex((q) => q.is_current);
+  const nowPlaying =
+    currentTrack ??
+    (currentIdx >= 0 ? queue[currentIdx] : null);
   const upNext = queue.filter((_, i) => i !== currentIdx);
 
   const handlePlayNow = async (item: QueueItem) => {
