@@ -240,8 +240,8 @@ async def add_to_queue(
 
 @router.post("/queue/next", response_model=QueueItemResponse | None)
 async def queue_next(
-    seed: str | None = None,
     background_tasks: BackgroundTasks,
+    seed: str | None = None,
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     queue_svc: QueueService = Depends(get_queue_service),
