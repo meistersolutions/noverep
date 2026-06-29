@@ -16,6 +16,7 @@ export interface YTPlayerInstance {
 
 const YT_PLAYING = 1;
 const YT_PAUSED = 2;
+const YT_BUFFERING = 3;
 const YT_ENDED = 0;
 const YT_CUED = 5;
 
@@ -26,8 +27,10 @@ let activeVideoId: string | null = null;
 let prefetchedVideoId: string | null = null;
 let ignoreEndedUntil = 0;
 let wantPlaying = false;
+let playbackGeneration = 0;
 let onNaturalEnd: (() => void) | null = null;
 let onPlayingChange: ((playing: boolean) => void) | null = null;
+let onActiveVideoId: ((videoId: string) => void) | null = null;
 
 const apiWaiters: Array<() => void> = [];
 const playerWaiters: Array<() => void> = [];
@@ -35,6 +38,18 @@ const backgroundRetryMs = [200, 400, 800, 1500, 2500, 4000, 6000, 9000, 12000];
 
 function notify(waiters: Array<() => void>) {
   waiters.splice(0).forEach((cb) => cb());
+}
+
+function isActivelyPlaying(): boolean {
+  if (!player || !activeVideoId) return false;
+  const state = player.getPlayerState?.();
+  return state === YT_PLAYING || state === YT_BUFFERING;
+}
+
+function notifyActiveVideo(videoId: string) {
+  if (!videoId) return;
+  activeVideoId = videoId;
+  onActiveVideoId?.(videoId);
 }
 
 export function waitForYouTubeApi(): Promise<void> {
@@ -70,9 +85,21 @@ export function getPlayer(): YTPlayerInstance | null {
   return player;
 }
 
+export function getActiveVideoId(): string | null {
+  if (!player?.getVideoData) return activeVideoId;
+  try {
+    const id = player.getVideoData()?.video_id;
+    return id || activeVideoId;
+  } catch {
+    return activeVideoId;
+  }
+}
+
 export function prepareTrackTransition() {
   wantPlaying = true;
-  ignoreEndedUntil = Date.now() + 4000;
+  playbackGeneration += 1;
+  ignoreEndedUntil = Date.now() + 5000;
+  prefetchedVideoId = null;
 }
 
 export function setWantPlaying(playing: boolean) {
@@ -87,25 +114,35 @@ export function setOnPlayingChange(cb: ((playing: boolean) => void) | null) {
   onPlayingChange = cb;
 }
 
-function schedulePlayRetries(videoId: string) {
-  const delays = document.hidden ? backgroundRetryMs : [200, 600, 1200, 2000, 3500];
+export function setOnActiveVideoId(cb: ((videoId: string) => void) | null) {
+  onActiveVideoId = cb;
+}
+
+function schedulePlayRetries(videoId: string, generation: number) {
+  const delays = document.hidden ? backgroundRetryMs : [400, 1200, 2500];
   delays.forEach((ms) => {
-    setTimeout(() => attemptPlay(videoId), ms);
+    setTimeout(() => {
+      if (generation !== playbackGeneration) return;
+      attemptPlay(videoId, generation);
+    }, ms);
   });
 }
 
-function attemptPlay(videoId: string) {
-  if (!player || activeVideoId !== videoId || !wantPlaying) return;
+function attemptPlay(videoId: string, generation = playbackGeneration) {
+  if (!player || generation !== playbackGeneration) return;
+  if (activeVideoId !== videoId || !wantPlaying) return;
   const state = player.getPlayerState?.();
   if (state !== YT_PLAYING) {
     player.playVideo();
   }
 }
 
-/** Buffer the upcoming track so skip/autoplay can start faster. */
+/** Buffer the upcoming track — never interrupt a song that is already playing. */
 export function prefetchVideo(videoId: string) {
   if (!player || !playerReady || !videoId) return;
   if (videoId === activeVideoId || videoId === prefetchedVideoId) return;
+  if (isActivelyPlaying()) return;
+
   try {
     player.cueVideoById(videoId);
     prefetchedVideoId = videoId;
@@ -117,17 +154,16 @@ export function prefetchVideo(videoId: string) {
 /** YouTube fires ENDED when switching videos – ignore those spurious events. */
 export function handlePlayerStateChange(state: number, target: YTPlayerInstance) {
   if (state === YT_PLAYING) {
+    const videoId = target.getVideoData?.()?.video_id;
+    if (videoId) notifyActiveVideo(videoId);
     onPlayingChange?.(true);
-    ignoreEndedUntil = Date.now() + 1500;
+    ignoreEndedUntil = Date.now() + 3000;
     return;
   }
 
   if (state === YT_PAUSED) {
     if (wantPlaying) {
       attemptPlay(activeVideoId ?? '');
-      if (document.hidden) {
-        schedulePlayRetries(activeVideoId ?? '');
-      }
       return;
     }
     onPlayingChange?.(false);
@@ -135,7 +171,13 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
   }
 
   if (state === YT_CUED) {
-    if (wantPlaying) attemptPlay(activeVideoId ?? '');
+    const videoId = target.getVideoData?.()?.video_id;
+    if (videoId && videoId === prefetchedVideoId && isActivelyPlaying()) {
+      return;
+    }
+    if (wantPlaying && videoId === activeVideoId) {
+      attemptPlay(videoId);
+    }
     return;
   }
 
@@ -158,34 +200,38 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
   await waitForPlayer();
   if (!player) return;
 
+  const generation = ++playbackGeneration;
   wantPlaying = true;
-  ignoreEndedUntil = Date.now() + 4000;
+  ignoreEndedUntil = Date.now() + 5000;
   player.setVolume(volume);
 
   const usePrefetched = prefetchedVideoId === videoId;
   activeVideoId = videoId;
   prefetchedVideoId = null;
+  notifyActiveVideo(videoId);
 
   if (usePrefetched) {
-    attemptPlay(videoId);
-    schedulePlayRetries(videoId);
+    attemptPlay(videoId, generation);
+    schedulePlayRetries(videoId, generation);
     return;
   }
 
   player.loadVideoById(videoId);
-  attemptPlay(videoId);
-  schedulePlayRetries(videoId);
+  attemptPlay(videoId, generation);
+  schedulePlayRetries(videoId, generation);
 }
 
 export function pausePlayback() {
   wantPlaying = false;
+  playbackGeneration += 1;
   player?.pauseVideo();
 }
 
 export function resumePlayback() {
-  wantPlaying = true;
-  player?.playVideo();
-  if (activeVideoId) schedulePlayRetries(activeVideoId);
+  if (!player || !activeVideoId || !wantPlaying) return;
+  const state = player.getPlayerState?.();
+  if (state === YT_PLAYING) return;
+  player.playVideo();
 }
 
 export function seekPlayback(seconds: number) {

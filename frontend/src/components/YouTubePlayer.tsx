@@ -6,6 +6,7 @@ import {
   handlePlayerStateChange,
   setOnNaturalEnd,
   setOnPlayingChange,
+  setOnActiveVideoId,
   setPlayerInstance,
   setWantPlaying,
   waitForYouTubeApi,
@@ -87,6 +88,10 @@ export function YouTubePlayer() {
   useEffect(() => {
     setOnPlayingChange((playing) => setPlaying(playing));
 
+    setOnActiveVideoId((videoId) => {
+      usePlayerStore.getState().syncToActiveVideo(videoId);
+    });
+
     setOnNaturalEnd(() => {
       const track = currentTrackRef.current;
       if (!track || !autoplayRef.current) return;
@@ -98,16 +103,14 @@ export function YouTubePlayer() {
     return () => {
       setOnNaturalEnd(null);
       setOnPlayingChange(null);
+      setOnActiveVideoId(null);
     };
   }, [setPlaying, next]);
 
   useEffect(() => {
     const p = getPlayer();
     if (!p || !currentTrack) return;
-
-    const state = p.getPlayerState?.();
-    if (isPlaying && state !== 1) p.playVideo();
-    if (!isPlaying && state === 1) p.pauseVideo();
+    if (!isPlaying && p.getPlayerState?.() === 1) p.pauseVideo();
   }, [isPlaying, currentTrack?.provider_track_id]);
 
   useEffect(() => {

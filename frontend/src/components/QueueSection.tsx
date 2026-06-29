@@ -106,13 +106,22 @@ export function QueueSection({ onRefreshPreferences, refreshing = false }: Queue
   const [playlistTrack, setPlaylistTrack] = useState<QueueItem | null>(null);
   const playlistMode = playbackMode === 'playlist';
 
-  const currentIdx = currentTrack
-    ? queue.findIndex((q) => q.provider_track_id === currentTrack.provider_track_id)
-    : queue.findIndex((q) => q.is_current);
+  const currentIdx =
+    currentTrack && 'id' in currentTrack && currentTrack.id
+      ? queue.findIndex((q) => q.id === currentTrack.id)
+      : currentTrack
+        ? queue.findIndex((q) => q.provider_track_id === currentTrack.provider_track_id)
+        : queue.findIndex((q) => q.is_current);
   const nowPlaying =
     currentTrack ??
     (currentIdx >= 0 ? queue[currentIdx] : null);
-  const upNext = queue.filter((_, i) => i !== currentIdx);
+  const playingQueueId =
+    nowPlaying && 'id' in nowPlaying ? nowPlaying.id : currentIdx >= 0 ? queue[currentIdx]?.id : null;
+  const upNext = playingQueueId
+    ? queue.filter((q) => q.id !== playingQueueId)
+    : currentIdx >= 0
+      ? queue.filter((_, i) => i !== currentIdx)
+      : queue;
 
   const handlePlayNow = async (item: QueueItem) => {
     try {

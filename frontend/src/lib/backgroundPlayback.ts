@@ -105,7 +105,6 @@ export function onPlaybackStateChange(isPlaying: boolean, getIsPlaying: () => bo
   if (isPlaying) {
     requestWakeLock();
     if (document.hidden) startKeepAlive(getIsPlaying);
-    if (isNativeApp) resumePlayback();
   } else {
     stopKeepAlive();
     releaseWakeLock();
