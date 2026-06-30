@@ -321,6 +321,17 @@ export interface AdminUser {
   is_guest: boolean;
   is_admin: boolean;
   created_at: string;
+  first_used_at: string;
+  last_used_at: string | null;
+  songs_played_count: number;
+}
+
+export function formatAdminDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 }
 
 export function formatDuration(seconds: number | null): string {

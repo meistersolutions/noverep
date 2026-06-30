@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Shield } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Navigate } from 'react-router-dom';
-import { api, AdminUser } from '@/lib/api';
+import { api, AdminUser, formatAdminDateTime } from '@/lib/api';
 import { usePlayerStore } from '@/stores/playerStore';
 
 export default function AdminPage() {
@@ -83,12 +83,15 @@ export default function AdminPage() {
         <code className="text-accent/80">ADMIN_PASSWORD</code> in your API environment to enable login.
       </p>
 
-      <div className="glass overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="glass overflow-x-auto">
+        <table className="w-full text-sm min-w-[640px]">
           <thead className="border-b border-white/10 text-white/50">
             <tr>
               <th className="text-left p-3">User</th>
-              <th className="text-left p-3 hidden sm:table-cell">Type</th>
+              <th className="text-left p-3 hidden md:table-cell">Type</th>
+              <th className="text-left p-3 hidden lg:table-cell">First use</th>
+              <th className="text-left p-3 hidden lg:table-cell">Last used</th>
+              <th className="text-right p-3">Songs</th>
               <th className="text-left p-3">Admin</th>
               <th className="text-left p-3">Password</th>
             </tr>
@@ -99,10 +102,20 @@ export default function AdminPage() {
                 <td className="p-3">
                   <p className="font-medium">{u.username}</p>
                   <p className="text-xs text-white/40">{u.email || '—'}</p>
+                  <p className="text-[10px] text-white/35 mt-1 lg:hidden">
+                    {formatAdminDateTime(u.first_used_at)} · {u.songs_played_count} songs
+                  </p>
                 </td>
-                <td className="p-3 hidden sm:table-cell text-white/60">
+                <td className="p-3 hidden md:table-cell text-white/60">
                   {u.is_guest ? 'Guest' : 'Registered'}
                 </td>
+                <td className="p-3 hidden lg:table-cell text-white/60 text-xs whitespace-nowrap">
+                  {formatAdminDateTime(u.first_used_at)}
+                </td>
+                <td className="p-3 hidden lg:table-cell text-white/60 text-xs whitespace-nowrap">
+                  {formatAdminDateTime(u.last_used_at)}
+                </td>
+                <td className="p-3 text-right font-medium tabular-nums">{u.songs_played_count}</td>
                 <td className="p-3">
                   <input
                     type="checkbox"
