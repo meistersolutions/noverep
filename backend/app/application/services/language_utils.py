@@ -149,12 +149,17 @@ def augment_search_query(query: str, languages: list[str]) -> str:
 
     if len(languages) == 1:
         lang = languages[0]
-        term = SUPPORTED_LANGUAGES[lang]["search_term"]
-        if term.lower() not in lower:
-            q = f"{q} {term}"
+        cfg = SUPPORTED_LANGUAGES.get(lang)
+        if cfg:
+            term = cfg["search_term"]
+            if term.lower() not in lower:
+                q = f"{q} {term}"
 
     for lang in languages:
-        term = SUPPORTED_LANGUAGES[lang]["search_term"].lower()
+        cfg = SUPPORTED_LANGUAGES.get(lang)
+        if not cfg:
+            continue
+        term = cfg["search_term"].lower()
         if term in lower:
             break
     else:

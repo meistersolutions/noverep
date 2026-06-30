@@ -1,3 +1,4 @@
+import asyncio
 import random
 from datetime import UTC, datetime
 from uuid import UUID
@@ -11,6 +12,12 @@ from app.domain.entities import ProviderTrack, RecommendationWeights, ScoredCand
 from app.domain.interfaces import MusicProvider
 
 logger = structlog.get_logger()
+
+QUICK_SEARCH_TIMEOUT_SEC = 50.0
+
+
+def _safe_lower(value: str | None) -> str:
+    return (value or "").strip().lower()
 
 
 class RecommendationEngine:
@@ -202,7 +209,17 @@ class RecommendationEngine:
             preferred_languages = resolve_languages_from_prefs(pref)
 
         search_query = augment_search_query(query, preferred_languages)
-        candidates = await provider.search(search_query, limit=limit * 2)
+        try:
+            candidates = await asyncio.wait_for(
+                provider.search(search_query, limit=limit + 10),
+                timeout=QUICK_SEARCH_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("quick_search_timeout", query=query)
+            candidates = []
+        except Exception as e:
+            logger.exception("quick_search_provider_failed", query=query, error=str(e))
+            candidates = []
 
         seen: set[str] = set()
         unique: list[ProviderTrack] = []
@@ -233,16 +250,16 @@ class RecommendationEngine:
         if not prefs:
             return tracks
 
-        blocked_artists = {a.lower() for a in (prefs.blocked_artists or [])}
-        blocked_albums = {a.lower() for a in (prefs.blocked_albums or [])}
-        blocked_songs = {s.lower() for s in (prefs.blocked_songs or [])}
+        blocked_artists = {_safe_lower(a) for a in (prefs.blocked_artists or []) if isinstance(a, str)}
+        blocked_albums = {_safe_lower(a) for a in (prefs.blocked_albums or []) if isinstance(a, str)}
+        blocked_songs = {_safe_lower(s) for s in (prefs.blocked_songs or []) if isinstance(s, str)}
 
         return [
             t
             for t in tracks
-            if t.artist.lower() not in blocked_artists
-            and (not t.album or t.album.lower() not in blocked_albums)
-            and t.title.lower() not in blocked_songs
+            if _safe_lower(t.artist) not in blocked_artists
+            and (not t.album or _safe_lower(t.album) not in blocked_albums)
+            and _safe_lower(t.title) not in blocked_songs
         ]
 
     def _score_track(

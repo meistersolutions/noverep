@@ -114,10 +114,18 @@ export const api = {
       '/auth/register',
       { method: 'POST', body: JSON.stringify({ username, password, email }) },
     ),
-  search: (q: string, provider = 'youtube', includeHeard = false, quick = true) =>
-    request<{ results: Track[]; total: number }>(
-      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}&quick=${quick}`,
-    ),
+  search: async (q: string, provider = 'youtube', includeHeard = false, quick = true) => {
+    const buildPath = (useQuick: boolean) =>
+      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}&quick=${useQuick}`;
+    try {
+      return await request<{ results: Track[]; total: number }>(buildPath(quick));
+    } catch (err) {
+      if (quick) {
+        return request<{ results: Track[]; total: number }>(buildPath(false));
+      }
+      throw err;
+    }
+  },
   getQueue: () => request<QueueItem[]>('/queue'),
   addToQueue: (provider: string, provider_track_id: string, explicitly_requested = false, play_now = false) =>
     request<QueueItem>('/queue', {

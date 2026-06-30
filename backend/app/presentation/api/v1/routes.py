@@ -1,5 +1,6 @@
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,14 +72,17 @@ from app.infrastructure.providers.youtube.metadata_utils import (
 )
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 
 def _track_response(track, score: float | None = None) -> TrackResponse:
+    title = (track.title or "Unknown").strip() or "Unknown"
+    artist = (track.artist or "Unknown Artist").strip() or "Unknown Artist"
     return TrackResponse(
         provider=track.provider,
         provider_track_id=track.provider_track_id,
-        title=track.title,
-        artist=track.artist,
+        title=title,
+        artist=artist,
         album=track.album,
         duration_seconds=track.duration_seconds,
         thumbnail_url=track.thumbnail_url,
@@ -177,24 +181,51 @@ async def search(
     session: AsyncSession = Depends(get_db_session),
     engine: RecommendationEngine = Depends(get_recommendation_engine),
 ):
-    if quick:
-        scored = await engine.quick_search(
-            session,
-            user.id,
-            q,
-            provider_name=provider,
-            limit=limit,
-            skip_memory_filter=include_heard,
-        )
-    else:
-        scored = await engine.recommend(
-            session,
-            user.id,
-            q,
-            provider_name=provider,
-            limit=limit,
-            skip_memory_filter=include_heard,
-        )
+    scored = []
+    try:
+        if quick:
+            scored = await engine.quick_search(
+                session,
+                user.id,
+                q,
+                provider_name=provider,
+                limit=limit,
+                skip_memory_filter=include_heard,
+            )
+        else:
+            scored = await engine.recommend(
+                session,
+                user.id,
+                q,
+                provider_name=provider,
+                limit=limit,
+                skip_memory_filter=include_heard,
+            )
+    except Exception as e:
+        logger.exception("search_failed", query=q, quick=quick, error=str(e))
+        if quick:
+            try:
+                scored = await engine.recommend(
+                    session,
+                    user.id,
+                    q,
+                    provider_name=provider,
+                    limit=limit,
+                    skip_memory_filter=include_heard,
+                )
+            except Exception as fallback_err:
+                logger.exception(
+                    "search_fallback_failed", query=q, error=str(fallback_err)
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Search is temporarily unavailable. Please try again.",
+                ) from fallback_err
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="Search is temporarily unavailable. Please try again.",
+            ) from e
     results = [_track_response(c.track, c.score) for c in scored]
     return SearchResponse(query=q, results=results, total=len(results))
 

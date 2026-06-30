@@ -30,9 +30,13 @@ def _parse_duration(title: str) -> tuple[str, str]:
             parts = title.split(sep, 1)
             if len(parts) == 2:
                 artist, song_title = parts[0].strip(), parts[1].strip()
+                if not artist:
+                    artist = "Unknown Artist"
                 song_title = re.sub(r"\(official.*?\)", "", song_title, flags=re.I).strip()
                 song_title = re.sub(r"\[.*?]", "", song_title).strip()
             break
+    if not song_title.strip():
+        song_title = title.strip() or "Unknown"
     return artist, song_title
 
 
@@ -52,6 +56,7 @@ class YouTubeProvider(MusicProvider):
             "extract_flat": extract_flat,
             "skip_download": True,
             "default_search": "ytsearch",
+            "socket_timeout": 20,
         }
         if not extract_flat:
             opts["format"] = "bestaudio/best"
@@ -164,11 +169,17 @@ class YouTubeProvider(MusicProvider):
             except ValueError:
                 release_year = None
 
+        display_artist = (entry.get("uploader") or entry.get("channel") or artist or "").strip()
+        if not display_artist:
+            display_artist = "Unknown Artist"
+        if not display_title or not str(display_title).strip():
+            display_title = title or "Unknown"
+
         return ProviderTrack(
             provider="youtube",
             provider_track_id=video_id,
-            title=display_title,
-            artist=entry.get("uploader") or entry.get("channel") or artist,
+            title=str(display_title).strip(),
+            artist=display_artist,
             album=None,
             duration_seconds=int(duration) if duration else None,
             thumbnail_url=thumbnail,
