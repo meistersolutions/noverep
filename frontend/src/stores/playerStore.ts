@@ -112,6 +112,8 @@ interface PlayerState {
   preferences: UserPreferences | null;
   initialized: boolean;
   historyVersion: number;
+  queueBuilding: boolean;
+  isAdmin: boolean;
   playbackMode: 'discovery' | 'playlist';
   activePlaylistId: string | null;
 
@@ -157,6 +159,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   preferences: null,
   initialized: false,
   historyVersion: 0,
+  queueBuilding: false,
+  isAdmin: false,
   playbackMode: 'discovery',
   activePlaylistId: null,
 
@@ -180,6 +184,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       preferences: null,
       currentTrack: null,
       queue: [],
+      queueBuilding: false,
+      isAdmin: false,
       playbackMode: 'discovery',
       activePlaylistId: null,
     });
@@ -191,13 +197,30 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     localStorage.setItem('noverep_session', sessionId);
     await get().loadPreferences();
-    if (get().playbackMode === 'playlist') {
-      await get().refreshQueue();
-    } else {
-      await get().fillQueue();
-      await get().refreshQueue();
+    try {
+      const me = await api.getMe();
+      set({ isAdmin: me.is_admin });
+      localStorage.setItem('noverep_display_name', me.display_name);
+    } catch {
+      /* optional */
     }
+
     set({ initialized: true });
+
+    const buildQueue = async () => {
+      set({ queueBuilding: true });
+      try {
+        if (get().playbackMode === 'playlist') {
+          await get().refreshQueue();
+        } else {
+          await get().fillQueue();
+          await get().refreshQueue();
+        }
+      } finally {
+        set({ queueBuilding: false });
+      }
+    };
+    void buildQueue();
   },
 
   bumpHistory: () => set((s) => ({ historyVersion: s.historyVersion + 1 })),

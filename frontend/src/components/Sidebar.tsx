@@ -9,8 +9,10 @@ import {
   Music2,
   Disc3,
   MessageSquare,
+  Shield,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { usePlayerStore } from '@/stores/playerStore';
 
 const links = [
   { to: '/', icon: Home, label: 'Home' },
@@ -25,6 +27,11 @@ const links = [
 ];
 
 export function Sidebar() {
+  const isAdmin = usePlayerStore((s) => s.isAdmin);
+  const navLinks = isAdmin
+    ? [...links, { to: '/admin', icon: Shield, label: 'Admin' }]
+    : links;
+
   return (
     <aside className="hidden md:flex flex-col w-64 glass m-4 mr-0 p-4 shrink-0">
       <div className="flex items-center gap-3 px-2 mb-8">
@@ -37,7 +44,7 @@ export function Sidebar() {
         </div>
       </div>
       <nav className="flex flex-col gap-1 flex-1">
-        {links.map(({ to, icon: Icon, label }) => (
+        {navLinks.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}

@@ -17,11 +17,14 @@ import SettingsPage from '@/pages/SettingsPage';
 import StatisticsPage from '@/pages/StatisticsPage';
 import FeedbackPage from '@/pages/FeedbackPage';
 import ProfilePage from '@/pages/ProfilePage';
+import AdminPage from '@/pages/AdminPage';
 import { api } from '@/lib/api';
+import { Loader2 } from 'lucide-react';
 
 function MainApp() {
   const init = usePlayerStore((s) => s.init);
   const initialized = usePlayerStore((s) => s.initialized);
+  const queueBuilding = usePlayerStore((s) => s.queueBuilding);
   const token = usePlayerStore((s) => s.token);
   const preferences = usePlayerStore((s) => s.preferences);
   const loadPreferences = usePlayerStore((s) => s.loadPreferences);
@@ -61,6 +64,12 @@ function MainApp() {
   return (
     <div className="flex min-h-screen pb-40 md:pb-24">
       {showOnboarding && <OnboardingModal onComplete={handleOnboardingComplete} />}
+      {queueBuilding && (
+        <div className="fixed top-0 left-0 right-0 z-[60] bg-accent/15 border-b border-accent/30 px-4 py-2 text-center text-xs text-accent flex items-center justify-center gap-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Building your discovery queue in the background…
+        </div>
+      )}
       <Sidebar />
       <main className="flex-1 p-4 md:p-6 overflow-auto w-full max-w-full">
         <Routes>
@@ -74,6 +83,7 @@ function MainApp() {
           <Route path="/feedback" element={<FeedbackPage />} />
           <Route path="/statistics" element={<StatisticsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/admin" element={<AdminPage />} />
         </Routes>
       </main>
       <MobileBottomNav />

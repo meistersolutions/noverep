@@ -171,6 +171,55 @@ class RecommendationEngine:
 
         return scored[:limit]
 
+    async def quick_search(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        query: str,
+        provider_name: str = "youtube",
+        limit: int = 20,
+        skip_memory_filter: bool = False,
+        preferred_languages: list[str] | None = None,
+    ) -> list[ScoredCandidate]:
+        """Fast search — YouTube lookup only, no per-track DB canonical resolution."""
+        from app.application.services.language_utils import (
+            augment_search_query,
+            filter_tracks_by_language,
+            resolve_languages_from_prefs,
+        )
+        from app.infrastructure.database.models import UserPreferencesModel
+        from sqlalchemy import select
+
+        provider = self.providers.get(provider_name)
+        if not provider:
+            return []
+
+        if preferred_languages is None:
+            pref_result = await session.execute(
+                select(UserPreferencesModel).where(UserPreferencesModel.user_id == user_id)
+            )
+            pref = pref_result.scalar_one_or_none()
+            preferred_languages = resolve_languages_from_prefs(pref)
+
+        search_query = augment_search_query(query, preferred_languages)
+        candidates = await provider.search(search_query, limit=limit * 2)
+
+        seen: set[str] = set()
+        unique: list[ProviderTrack] = []
+        for track in candidates:
+            if track.provider_track_id in seen:
+                continue
+            seen.add(track.provider_track_id)
+            unique.append(track)
+
+        filtered = await self._apply_user_blocks(session, user_id, unique)
+        filtered = filter_tracks_by_language(filtered, preferred_languages)
+
+        return [
+            ScoredCandidate(track=t, score=t.popularity, reasons={"quick": 1.0})
+            for t in filtered[:limit]
+        ]
+
     async def _apply_user_blocks(
         self, session: AsyncSession, user_id: UUID, tracks: list[ProviderTrack]
     ) -> list[ProviderTrack]:

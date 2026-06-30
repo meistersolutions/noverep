@@ -1,8 +1,9 @@
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import { usePlayerStore } from '@/stores/playerStore';
 import { seekPlayback } from '@/lib/youtubePlayerController';
-import { formatDuration } from '@/lib/api';
+import { formatDuration, Track } from '@/lib/api';
 import { Link } from 'react-router-dom';
+import { TrackPlayerActions } from '@/components/TrackPlayerActions';
 
 export function PlayerBar() {
   const {
@@ -46,6 +47,7 @@ export function PlayerBar() {
             </div>
           </Link>
           <div className="flex items-center gap-1 shrink-0">
+            <TrackPlayerActions track={currentTrack as Track} compact />
             <button className="btn-ghost p-2" onClick={() => previous()} aria-label="Previous">
               <SkipBack className="w-5 h-5" />
             </button>
@@ -99,7 +101,9 @@ export function PlayerBar() {
           </Link>
 
           <div className="flex-1 flex flex-col items-center gap-2 max-w-xl mx-auto">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <TrackPlayerActions track={currentTrack as Track} />
+              <div className="flex items-center gap-4">
               <button className="btn-ghost" onClick={() => previous()} aria-label="Previous">
                 <SkipBack className="w-5 h-5" />
               </button>
@@ -112,6 +116,7 @@ export function PlayerBar() {
               <button className="btn-ghost" onClick={() => next()} aria-label="Next">
                 <SkipForward className="w-5 h-5" />
               </button>
+              </div>
             </div>
             <div className="flex items-center gap-2 w-full">
               <span className="text-xs text-white/50 w-10 text-right">

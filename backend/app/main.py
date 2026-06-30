@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.infrastructure.database.models import Base
 from app.infrastructure.database.session import engine
+from app.presentation.api.v1.admin_routes import router as admin_router
 from app.presentation.api.v1.routes import router
 
 structlog.configure(
@@ -43,6 +44,9 @@ async def lifespan(app: FastAPI):
         )
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
         )
         await conn.execute(
             text(
@@ -89,6 +93,7 @@ async def lifespan(app: FastAPI):
                 "ON CONFLICT (name) DO NOTHING"
             )
         )
+    await _seed_admin_user()
     logger.info("startup_complete")
     yield
     await engine.dispose()
@@ -149,3 +154,40 @@ async def health(request: Request):
 
 
 app.include_router(router, prefix=settings.api_prefix)
+app.include_router(admin_router, prefix=settings.api_prefix)
+
+
+async def _seed_admin_user() -> None:
+    """Ensure default admin account exists; password from ADMIN_PASSWORD env."""
+    from sqlalchemy import select
+
+    from app.infrastructure.auth.auth_service import hash_password
+    from app.infrastructure.database.models import UserModel, UserPreferencesModel
+    from app.infrastructure.database.session import async_session_factory
+
+    username = settings.admin_username.strip()
+    if not username:
+        return
+
+    async with async_session_factory() as session:
+        result = await session.execute(select(UserModel).where(UserModel.username == username))
+        user = result.scalar_one_or_none()
+        if not user:
+            user = UserModel(
+                username=username,
+                email=None,
+                hashed_password=hash_password(settings.admin_password)
+                if settings.admin_password
+                else None,
+                is_guest=False,
+                is_admin=True,
+                display_name="Admin",
+            )
+            session.add(user)
+            await session.flush()
+            session.add(UserPreferencesModel(user_id=user.id))
+        else:
+            user.is_admin = True
+            if settings.admin_password:
+                user.hashed_password = hash_password(settings.admin_password)
+        await session.commit()

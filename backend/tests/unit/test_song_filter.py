@@ -18,3 +18,9 @@ class TestSongFilter:
 
     def test_accepts_normal_song(self):
         assert is_single_song_track("Artist - Song Name (Official Audio)", 240)
+
+    def test_rejects_concert(self):
+        assert not is_single_song_track("Artist - Live at Wembley Stadium 2019", 300)
+
+    def test_rejects_instrumental(self):
+        assert not is_single_song_track("Song Name - Piano Cover", 240)

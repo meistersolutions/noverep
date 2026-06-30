@@ -1,3 +1,4 @@
+import asyncio
 import random
 from uuid import UUID
 
@@ -37,13 +38,11 @@ class HomeRecommendationService:
         year_from = getattr(prefs, "discovery_year_from", None) if prefs else None
         year_to = getattr(prefs, "discovery_year_to", None) if prefs else None
 
-        sections: list[dict] = []
         seen_ids: set[str] = set()
-
-        home_queries = build_random_home_queries(languages, section_count=4)
+        home_queries = build_random_home_queries(languages, section_count=3)
         random.shuffle(home_queries)
 
-        async def add_section(title: str, query: str, limit: int = 6) -> None:
+        async def build_section(title: str, query: str, limit: int = 6) -> dict | None:
             scored = await self.engine.recommend(
                 session,
                 user_id,
@@ -77,13 +76,18 @@ class HomeRecommendationService:
                 if len(tracks) >= limit:
                     break
             if tracks:
-                sections.append({"title": title, "tracks": tracks})
+                return {"title": title, "tracks": tracks}
+            return None
 
-        for hq in home_queries:
-            await add_section(hq.title, hq.query)
+        built = await asyncio.gather(
+            *[build_section(hq.title, hq.query) for hq in home_queries]
+        )
+        sections = [s for s in built if s]
 
         if not sections:
             lang = random.choice(languages)
-            await add_section("Discover New Music", random_lang_discovery_query(lang))
+            fallback = await build_section("Discover New Music", random_lang_discovery_query(lang))
+            if fallback:
+                sections.append(fallback)
 
         return sections

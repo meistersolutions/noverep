@@ -172,18 +172,29 @@ async def search(
     provider: str = "youtube",
     limit: int = Query(default=20, le=50),
     include_heard: bool = Query(default=False),
+    quick: bool = Query(default=True, description="Fast search without full DB pipeline"),
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     engine: RecommendationEngine = Depends(get_recommendation_engine),
 ):
-    scored = await engine.recommend(
-        session,
-        user.id,
-        q,
-        provider_name=provider,
-        limit=limit,
-        skip_memory_filter=include_heard,
-    )
+    if quick:
+        scored = await engine.quick_search(
+            session,
+            user.id,
+            q,
+            provider_name=provider,
+            limit=limit,
+            skip_memory_filter=include_heard,
+        )
+    else:
+        scored = await engine.recommend(
+            session,
+            user.id,
+            q,
+            provider_name=provider,
+            limit=limit,
+            skip_memory_filter=include_heard,
+        )
     results = [_track_response(c.track, c.score) for c in scored]
     return SearchResponse(query=q, results=results, total=len(results))
 
@@ -880,6 +891,7 @@ async def get_me(user: UserModel = Depends(get_current_user)):
         "display_name": user.display_name or user.username,
         "email": user.email,
         "is_guest": user.is_guest,
+        "is_admin": user.is_admin,
         "avatar_url": user.avatar_url,
     }
 

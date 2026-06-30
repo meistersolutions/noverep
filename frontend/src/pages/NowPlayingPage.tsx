@@ -1,9 +1,7 @@
-import { useEffect, useState } from 'react';
 import { usePlayerStore } from '@/stores/playerStore';
-import { api, formatDuration, Track } from '@/lib/api';
-import { Disc3, Pause, Play, ListMusic, ThumbsUp } from 'lucide-react';
-import { AddToPlaylistModal } from '@/components/AddToPlaylistModal';
-import toast from 'react-hot-toast';
+import { formatDuration, Track } from '@/lib/api';
+import { Disc3, Pause, Play } from 'lucide-react';
+import { TrackPlayerActions } from '@/components/TrackPlayerActions';
 
 export default function NowPlayingPage() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -12,44 +10,8 @@ export default function NowPlayingPage() {
   const duration = usePlayerStore((s) => s.duration);
   const setPlaying = usePlayerStore((s) => s.setPlaying);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
-  const [playlistOpen, setPlaylistOpen] = useState(false);
-  const [liked, setLiked] = useState(false);
-  const [liking, setLiking] = useState(false);
 
   const track = currentTrack;
-
-  useEffect(() => {
-    if (!track?.provider_track_id) {
-      setLiked(false);
-      return;
-    }
-    let cancelled = false;
-    api
-      .getLikedStatus(track.provider, track.provider_track_id)
-      .then((res) => {
-        if (!cancelled) setLiked(res.liked);
-      })
-      .catch(() => {
-        if (!cancelled) setLiked(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [track?.provider, track?.provider_track_id]);
-
-  const handleLike = async () => {
-    if (!track || liking) return;
-    setLiking(true);
-    try {
-      const res = await api.likeTrack(track.provider, track.provider_track_id, track);
-      setLiked(true);
-      toast.success(res.already_liked ? 'Already in Liked' : 'Added to Liked');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not like song');
-    } finally {
-      setLiking(false);
-    }
-  };
 
   if (!track) {
     return (
@@ -107,26 +69,8 @@ export default function NowPlayingPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mt-6">
-        <button
-          type="button"
-          className={`btn-ghost p-3 rounded-full transition-colors ${
-            liked ? 'text-accent bg-accent/15' : 'text-white/70'
-          }`}
-          onClick={handleLike}
-          disabled={liking}
-          aria-label={liked ? 'Liked' : 'Like song'}
-          title={liked ? 'In Liked' : 'Add to Liked'}
-        >
-          <ThumbsUp className={`w-6 h-6 ${liked ? 'fill-current' : ''}`} />
-        </button>
-        <button
-          className="btn-ghost flex items-center gap-2 px-4 py-2"
-          onClick={() => setPlaylistOpen(true)}
-        >
-          <ListMusic className="w-5 h-5" />
-          <span className="text-sm">Add to Playlist</span>
-        </button>
+      <div className="flex items-center gap-4 mt-6">
+        <TrackPlayerActions track={track as Track} />
         <button
           className="w-14 h-14 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition-transform"
           onClick={() => setPlaying(!isPlaying)}
@@ -134,12 +78,6 @@ export default function NowPlayingPage() {
           {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
         </button>
       </div>
-
-      <AddToPlaylistModal
-        track={track as Track}
-        open={playlistOpen}
-        onClose={() => setPlaylistOpen(false)}
-      />
     </div>
   );
 }

@@ -114,9 +114,9 @@ export const api = {
       '/auth/register',
       { method: 'POST', body: JSON.stringify({ username, password, email }) },
     ),
-  search: (q: string, provider = 'youtube', includeHeard = false) =>
+  search: (q: string, provider = 'youtube', includeHeard = false, quick = true) =>
     request<{ results: Track[]; total: number }>(
-      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}`,
+      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}&quick=${quick}`,
     ),
   getQueue: () => request<QueueItem[]>('/queue'),
   addToQueue: (provider: string, provider_track_id: string, explicitly_requested = false, play_now = false) =>
@@ -256,6 +256,7 @@ export const api = {
       display_name: string;
       email: string | null;
       is_guest: boolean;
+      is_admin: boolean;
     }>('/me'),
   completeOnboarding: (data: {
     display_name: string;
@@ -275,7 +276,25 @@ export const api = {
     request<
       { id: string; feedback_type: string; title: string; status: string; created_at: string }[]
     >('/feedback/mine'),
+  adminListUsers: () => request<AdminUser[]>('/admin/users'),
+  adminStats: () =>
+    request<{ total_users: number; guest_users: number; admin_users: number }>('/admin/stats'),
+  adminUpdateUser: (userId: string, data: { is_admin?: boolean; password?: string }) =>
+    request<AdminUser>(`/admin/users/${userId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
 };
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string | null;
+  display_name: string | null;
+  is_guest: boolean;
+  is_admin: boolean;
+  created_at: string;
+}
 
 export function formatDuration(seconds: number | null): string {
   if (!seconds) return '--:--';

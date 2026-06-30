@@ -30,6 +30,7 @@ class UserModel(Base):
     display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_guest: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     google_id: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

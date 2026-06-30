@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, X } from 'lucide-react';
+import { ListMusic, Loader2, Search, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api, Track } from '@/lib/api';
 import { SongCard, SongCardSkeleton } from '@/components/SongCard';
@@ -14,7 +14,8 @@ export default function SearchPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Track[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [queueUpdating, setQueueUpdating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const queueTrack = usePlayerStore((s) => s.queueTrack);
@@ -23,14 +24,11 @@ export default function SearchPage() {
   const refreshQueueFromSearch = usePlayerStore((s) => s.refreshQueueFromSearch);
   const refreshQueueFromPreferences = usePlayerStore((s) => s.refreshQueueFromPreferences);
   const clearActiveSearchQuery = usePlayerStore((s) => s.clearActiveSearchQuery);
+  const queueBuilding = usePlayerStore((s) => s.queueBuilding);
   const preferences = usePlayerStore((s) => s.preferences);
   const activeSearch = preferences?.active_search_query;
   const discoverOnly = useDiscoverOnly();
   const includeHeard = !discoverOnly;
-
-  useEffect(() => {
-    refreshQueue();
-  }, [refreshQueue]);
 
   useEffect(() => {
     if (preferences?.active_search_query) {
@@ -50,23 +48,37 @@ export default function SearchPage() {
     e.preventDefault();
     const q = query.trim();
     if (!q) return;
+    setSearching(true);
+    try {
+      const res = await api.search(q, 'youtube', includeHeard, true);
+      setResults(res.results);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Search failed');
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleUpdateQueue = async () => {
+    const q = query.trim();
+    if (!q) {
+      toast.error('Enter a search term first');
+      return;
+    }
     if (usePlayerStore.getState().playbackMode === 'playlist') {
       toast.error('Exit playlist mode first — play from Home or Search');
       return;
     }
-    setLoading(true);
+    setQueueUpdating(true);
+    toast('Building your queue in the background…', { icon: '⏳' });
     try {
-      const [res] = await Promise.all([
-        api.search(q, 'youtube', includeHeard),
-        refreshQueueFromSearch(q),
-      ]);
-      setResults(res.results);
+      await refreshQueueFromSearch(q);
       await refreshQueue();
-      toast.success('Queue locked to your search');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Search failed');
+      toast.success('Queue updated from your search');
+    } catch {
+      toast.error('Could not update queue');
     } finally {
-      setLoading(false);
+      setQueueUpdating(false);
     }
   };
 
@@ -81,10 +93,12 @@ export default function SearchPage() {
 
   const handleRefreshPreferences = async () => {
     setRefreshing(true);
+    toast('Refreshing queue from preferences in the background…', { icon: '⏳' });
     try {
       await refreshQueueFromPreferences();
       setQuery('');
       setResults([]);
+      await refreshQueue();
       toast.success('Queue refreshed from your preferences');
     } catch {
       toast.error('Could not refresh queue');
@@ -135,40 +149,71 @@ export default function SearchPage() {
         <DiscoverModeToggle />
       </div>
 
-      <form onSubmit={handleSearch} className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40 pointer-events-none" />
-        <input
-          type="search"
-          enterKeyHint="search"
-          value={query}
-          onChange={(e) => handleQueryChange(e.target.value)}
-          placeholder="Search songs, artists..."
-          className="w-full glass pl-12 pr-12 py-3.5 text-base focus:outline-none focus:ring-2 focus:ring-accent/50"
-        />
-        {query && (
-          <button
-            type="button"
-            onClick={handleClearSearch}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white"
-            aria-label="Clear search"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        )}
-      </form>
-
-      {activeSearch && (
-        <p className="text-xs text-accent/90">
-          Queue is building from: <span className="font-medium">&ldquo;{activeSearch}&rdquo;</span> — clear
-          search to return to random discovery.
+      {queueBuilding && (
+        <p className="text-xs text-accent/90 flex items-center gap-2 glass px-3 py-2 rounded-lg">
+          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+          Building your discovery queue in the background — you can search and play right away.
         </p>
       )}
 
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40 pointer-events-none" />
+          <input
+            type="search"
+            enterKeyHint="search"
+            value={query}
+            onChange={(e) => handleQueryChange(e.target.value)}
+            placeholder="Search songs, artists…"
+            className="w-full glass pl-12 pr-10 py-3.5 text-base focus:outline-none focus:ring-2 focus:ring-accent/50"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white"
+              aria-label="Clear search"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+        <button
+          type="submit"
+          disabled={searching || !query.trim()}
+          className="btn-primary px-4 shrink-0 flex items-center gap-2"
+        >
+          {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+          <span className="hidden sm:inline">Search</span>
+        </button>
+        <button
+          type="button"
+          onClick={handleUpdateQueue}
+          disabled={queueUpdating || !query.trim()}
+          className="btn-ghost px-3 shrink-0 flex items-center gap-2 border border-white/10"
+          title="Rebuild upcoming queue from this search (runs in background)"
+        >
+          {queueUpdating ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <ListMusic className="w-4 h-4" />
+          )}
+          <span className="hidden sm:inline">Update Queue</span>
+        </button>
+      </form>
+
       <p className="text-xs text-white/40">
-        {discoverOnly
-          ? 'Discover mode: hiding songs you heard recently. Search locks the queue to your query.'
-          : 'All songs mode. Search locks upcoming queue tracks to your query until cleared.'}
+        <strong className="text-white/60">Search</strong> shows results instantly. Use{' '}
+        <strong className="text-white/60">Update Queue</strong> when you want upcoming tracks rebuilt
+        from your query (works in the background).
       </p>
+
+      {activeSearch && (
+        <p className="text-xs text-accent/90">
+          Queue seed: <span className="font-medium">&ldquo;{activeSearch}&rdquo;</span> — clear search
+          to return to random discovery.
+        </p>
+      )}
 
       <SearchPreferencesPanel
         onPreferencesSaved={() => {
@@ -180,12 +225,12 @@ export default function SearchPage() {
 
       <QueueSection onRefreshPreferences={handleRefreshPreferences} refreshing={refreshing} />
 
-      {results.length > 0 || loading ? (
+      {results.length > 0 || searching ? (
         <section className="space-y-3">
           <h3 className="text-lg font-semibold">Results</h3>
           <div className="grid gap-2 sm:gap-3">
-            {loading && Array.from({ length: 5 }).map((_, i) => <SongCardSkeleton key={i} />)}
-            {!loading &&
+            {searching && Array.from({ length: 5 }).map((_, i) => <SongCardSkeleton key={i} />)}
+            {!searching &&
               results.map((t) => (
                 <SongCard
                   key={t.provider_track_id}
@@ -195,7 +240,7 @@ export default function SearchPage() {
                   onAdd={handleAddToQueue}
                 />
               ))}
-            {!loading && results.length === 0 && query && (
+            {!searching && results.length === 0 && query && (
               <p className="text-white/50 text-center py-8">No songs found. Try another search.</p>
             )}
           </div>

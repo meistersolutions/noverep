@@ -15,6 +15,31 @@ MULTI_SONG_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Live concerts, unplugged sets, full shows
+CONCERT_PATTERN = re.compile(
+    r"\b("
+    r"live concert|live at|live from|live performance|full concert|"
+    r"concert video|unplugged session|mtv unplugged|"
+    r"coachella|lollapalooza|glastonbury|"
+    r"world tour live|tour live|festival live|"
+    r"live\s+@\s*|live\s+in\s+|"
+    r"\blive\b.*\b(19|20)\d{2}\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Instrumental / karaoke / cover versions (not original vocal tracks)
+INSTRUMENT_PATTERN = re.compile(
+    r"\b("
+    r"instrumental|karaoke|backing track|minus one|minusone|"
+    r"no vocals|without vocals|8d audio|8d\s+audio|"
+    r"piano cover|guitar cover|violin cover|flute cover|saxophone|"
+    r"cover version|tribute to|in the style of|"
+    r"reverb|slowed\s*\+\s*reverb|sped up|nightcore"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Non-music / video content indicators
 NON_MUSIC_PATTERN = re.compile(
     r"\b(trailer|teaser|interview|reaction|tutorial|vlog|"
@@ -45,6 +70,12 @@ def is_single_song_track(title: str, duration_seconds: int | None) -> bool:
         return False
 
     if MULTI_SONG_PATTERN.search(title):
+        return False
+
+    if CONCERT_PATTERN.search(title):
+        return False
+
+    if INSTRUMENT_PATTERN.search(title):
         return False
 
     if duration_seconds is not None:

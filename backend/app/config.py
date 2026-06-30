@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     rate_limit: str = "100/minute"
 
+    admin_username: str = "admin"
+    admin_password: str = ""  # set via ADMIN_PASSWORD env; empty = password set later
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
