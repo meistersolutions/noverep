@@ -63,11 +63,11 @@ class YouTubeProvider(MusicProvider):
             opts["ignore_no_formats_error"] = True
         return opts
 
-    async def search(self, query: str, limit: int = 20) -> list[ProviderTrack]:
-        return await asyncio.to_thread(self._search_sync, query, limit)
+    async def search(self, query: str, limit: int = 20, *, raw: bool = False) -> list[ProviderTrack]:
+        return await asyncio.to_thread(self._search_sync, query, limit, raw)
 
-    def _search_sync(self, query: str, limit: int) -> list[ProviderTrack]:
-        normalized = normalize_search_query(query)
+    def _search_sync(self, query: str, limit: int, raw: bool = False) -> list[ProviderTrack]:
+        normalized = query.strip() if raw else normalize_search_query(query)
         fetch_count = min(limit * self.SEARCH_BUFFER, 60)
         search_query = f"ytsearch{fetch_count}:{normalized}"
         raw: list[ProviderTrack] = []

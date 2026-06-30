@@ -95,11 +95,16 @@ function QueueRow({
 }
 
 interface QueueSectionProps {
-  onRefreshPreferences: () => Promise<void>;
+  onRefreshPreferences?: () => Promise<void>;
   refreshing?: boolean;
+  showRefresh?: boolean;
 }
 
-export function QueueSection({ onRefreshPreferences, refreshing = false }: QueueSectionProps) {
+export function QueueSection({
+  onRefreshPreferences,
+  refreshing = false,
+  showRefresh = true,
+}: QueueSectionProps) {
   const navigate = useNavigate();
   const { queue, refreshQueue, playTrack, playQueueItem, currentTrack, next, playbackMode } =
     usePlayerStore();
@@ -152,6 +157,7 @@ export function QueueSection({ onRefreshPreferences, refreshing = false }: Queue
   };
 
   const handleRefresh = async () => {
+    if (!onRefreshPreferences) return;
     await onRefreshPreferences();
     await refreshQueue();
   };
@@ -177,7 +183,7 @@ export function QueueSection({ onRefreshPreferences, refreshing = false }: Queue
               Skip
             </button>
           )}
-          {!playlistMode && (
+          {!playlistMode && showRefresh && onRefreshPreferences && (
             <button
               className="btn-ghost flex items-center gap-1.5 text-sm"
               onClick={handleRefresh}

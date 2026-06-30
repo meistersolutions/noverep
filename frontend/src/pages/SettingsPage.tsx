@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api, UserPreferences } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { LanguageMultiSelect } from '@/components/LanguageMultiSelect';
 import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
 import { effectiveLanguages, languageLabels } from '@/lib/languages';
 import { MEMORY_WINDOWS } from '@/lib/preferenceOptions';
+import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 
 const WEIGHT_LABELS: Record<string, string> = {
   artist_diversity: 'Artist Diversity',
@@ -23,20 +24,45 @@ const WEIGHT_LABELS: Record<string, string> = {
 export default function SettingsPage() {
   const [prefs, setPrefs] = useState<UserPreferences | null>(null);
   const [blockedArtist, setBlockedArtist] = useState('');
+  const [draftWeights, setDraftWeights] = useState<Record<string, number>>({});
+  const [weightsSaving, setWeightsSaving] = useState(false);
 
   useEffect(() => {
-    api.getPreferences().then(setPrefs);
+    api.getPreferences().then((p) => {
+      setPrefs(p);
+      setDraftWeights({ ...p.recommendation_weights });
+    });
   }, []);
 
-  const save = async (updates: Partial<UserPreferences>) => {
+  const save = async (updates: Partial<UserPreferences>, quiet = false) => {
     const updated = await api.updatePreferences(updates);
     setPrefs(updated);
-    toast.success('Settings saved');
+    if (!quiet) toast.success('Settings saved');
+  };
+
+  const persistWeights = useCallback(async (weights: Record<string, number>) => {
+    setWeightsSaving(true);
+    try {
+      const updated = await api.updatePreferences({ recommendation_weights: weights });
+      setPrefs(updated);
+      setDraftWeights({ ...updated.recommendation_weights });
+      toast.success('Recommendation weights saved');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save weights');
+    } finally {
+      setWeightsSaving(false);
+    }
+  }, []);
+
+  const debouncedSaveWeights = useDebouncedCallback(persistWeights, 800);
+
+  const handleWeightChange = (key: string, value: number) => {
+    const next = { ...draftWeights, [key]: value };
+    setDraftWeights(next);
+    debouncedSaveWeights(next);
   };
 
   if (!prefs) return <div className="animate-pulse glass h-96" />;
-
-  const weights = { ...prefs.recommendation_weights };
 
   return (
     <div className="space-y-8 max-w-2xl">
@@ -136,23 +162,25 @@ export default function SettingsPage() {
       </section>
 
       <section className="glass p-6 space-y-4">
-        <h3 className="font-semibold text-lg">Recommendation Weights</h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-semibold text-lg">Recommendation Weights</h3>
+          {weightsSaving && (
+            <span className="text-xs text-white/50">Saving…</span>
+          )}
+        </div>
         {Object.entries(WEIGHT_LABELS).map(([key, label]) => (
           <div key={key}>
             <div className="flex justify-between text-sm mb-1">
               <span>{label}</span>
-              <span className="text-white/50">{(weights[key] ?? 0.5).toFixed(1)}</span>
+              <span className="text-white/50">{(draftWeights[key] ?? 0.5).toFixed(1)}</span>
             </div>
             <input
               type="range"
               min={0}
               max={2}
               step={0.1}
-              value={weights[key] ?? 0.5}
-              onChange={(e) => {
-                weights[key] = Number(e.target.value);
-                save({ recommendation_weights: { ...weights } });
-              }}
+              value={draftWeights[key] ?? 0.5}
+              onChange={(e) => handleWeightChange(key, Number(e.target.value))}
               className="w-full accent-accent"
             />
           </div>

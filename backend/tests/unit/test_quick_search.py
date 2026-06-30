@@ -50,3 +50,32 @@ class TestApplyUserBlocks:
         filtered = await engine._apply_user_blocks(session, "user-id", tracks)
         assert len(filtered) == 1
         assert filtered[0].provider_track_id == "1"
+
+
+class TestRawSearch:
+    @pytest.mark.asyncio
+    async def test_raw_search_uses_literal_query(self):
+        from app.domain.entities import ProviderTrack
+
+        track = ProviderTrack(
+            provider="youtube",
+            provider_track_id="abc",
+            title="Song",
+            artist="Artist",
+            album=None,
+            duration_seconds=200,
+            thumbnail_url=None,
+        )
+
+        class FakeProvider:
+            name = "youtube"
+
+            async def search(self, query: str, limit: int = 20, *, raw: bool = False):
+                assert raw is True
+                assert query == "exact query"
+                return [track]
+
+        engine = RecommendationEngine({"youtube": FakeProvider()}, None, None)
+        results = await engine.raw_search("exact query", limit=5)
+        assert len(results) == 1
+        assert results[0].track.provider_track_id == "abc"

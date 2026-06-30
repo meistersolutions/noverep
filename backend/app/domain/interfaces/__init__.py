@@ -12,7 +12,7 @@ class MusicProvider(ABC):
         ...
 
     @abstractmethod
-    async def search(self, query: str, limit: int = 20) -> list[ProviderTrack]:
+    async def search(self, query: str, limit: int = 20, *, raw: bool = False) -> list[ProviderTrack]:
         ...
 
     @abstractmethod

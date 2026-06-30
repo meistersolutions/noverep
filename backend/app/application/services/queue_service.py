@@ -2,6 +2,7 @@ from uuid import UUID
 
 import random
 import structlog
+from dataclasses import dataclass
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,16 @@ from app.infrastructure.database.models import (
 logger = structlog.get_logger()
 
 TARGET_QUEUE_SIZE = 20
+
+
+@dataclass
+class QueueRefreshFilters:
+    """Optional per-refresh overrides (fall back to saved preferences when unset)."""
+
+    preferred_languages: list[str] | None = None
+    year_from: int | None = None
+    year_to: int | None = None
+    skip_memory_filter: bool = False
 
 
 class QueueService:
@@ -67,14 +78,19 @@ class QueueService:
         current: QueueItemModel | None = None,
         seed_query: str | None = None,
         from_preferences: bool = False,
+        filters: QueueRefreshFilters | None = None,
     ) -> list[str]:
-        langs = self._user_languages(pref)
+        langs = (
+            filters.preferred_languages
+            if filters and filters.preferred_languages
+            else self._user_languages(pref)
+        )
 
         if from_preferences:
             return [
-                self._build_seed_query(pref),
+                self._build_seed_query(pref, filters=filters),
                 random_lang_discovery_query(random.choice(langs)),
-                *self._year_queries(pref),
+                *self._year_queries(pref, filters=filters),
             ]
 
         active = (getattr(pref, "active_search_query", None) or "").strip() if pref else ""
@@ -89,12 +105,15 @@ class QueueService:
             return [
                 self._seed_from_track(current.artist, pref),
                 augment_search_query(f"{current.artist} similar songs", langs),
-                self._build_seed_query(pref),
-                *self._year_queries(pref, current.artist),
+                self._build_seed_query(pref, filters=filters),
+                *self._year_queries(pref, current.artist, filters=filters),
                 random_lang_discovery_query(random.choice(langs)),
             ]
 
-        return [self._build_seed_query(pref), random_lang_discovery_query(random.choice(langs))]
+        return [
+            self._build_seed_query(pref, filters=filters),
+            random_lang_discovery_query(random.choice(langs)),
+        ]
 
     async def _persist_active_search(
         self,
@@ -113,23 +132,41 @@ class QueueService:
         return augment_search_query(artist, [primary])
 
     def _build_seed_query(
-        self, pref: UserPreferencesModel | None, seed: str | None = None, artist: str | None = None
+        self,
+        pref: UserPreferencesModel | None,
+        seed: str | None = None,
+        artist: str | None = None,
+        filters: QueueRefreshFilters | None = None,
     ) -> str:
         if seed:
-            langs = self._user_languages(pref)
+            langs = (
+                filters.preferred_languages
+                if filters and filters.preferred_languages
+                else self._user_languages(pref)
+            )
             return augment_search_query(seed, langs)
         if artist:
             return self._seed_from_track(artist, pref)
-        year_q = self._year_suffix(pref)
-        langs = self._user_languages(pref)
+        year_q = self._year_suffix(pref, filters)
+        langs = (
+            filters.preferred_languages
+            if filters and filters.preferred_languages
+            else self._user_languages(pref)
+        )
         lang = random.choice(langs)
         return f"{random_lang_discovery_query(lang)}{year_q}"
 
-    def _year_suffix(self, pref: UserPreferencesModel | None) -> str:
-        if not pref:
-            return ""
-        y_from = getattr(pref, "discovery_year_from", None)
-        y_to = getattr(pref, "discovery_year_to", None)
+    def _year_suffix(self, pref: UserPreferencesModel | None, filters: QueueRefreshFilters | None = None) -> str:
+        y_from = (
+            filters.year_from
+            if filters and filters.year_from is not None
+            else (getattr(pref, "discovery_year_from", None) if pref else None)
+        )
+        y_to = (
+            filters.year_to
+            if filters and filters.year_to is not None
+            else (getattr(pref, "discovery_year_to", None) if pref else None)
+        )
         if y_from and y_to:
             return f" {y_from} {y_to}"
         if y_from:
@@ -138,12 +175,29 @@ class QueueService:
             return f" {y_to}"
         return ""
 
-    def _year_queries(self, pref: UserPreferencesModel | None, artist: str | None = None) -> list[str]:
-        y_from = getattr(pref, "discovery_year_from", None) if pref else None
-        y_to = getattr(pref, "discovery_year_to", None) if pref else None
+    def _year_queries(
+        self,
+        pref: UserPreferencesModel | None,
+        artist: str | None = None,
+        filters: QueueRefreshFilters | None = None,
+    ) -> list[str]:
+        y_from = (
+            filters.year_from
+            if filters and filters.year_from is not None
+            else (getattr(pref, "discovery_year_from", None) if pref else None)
+        )
+        y_to = (
+            filters.year_to
+            if filters and filters.year_to is not None
+            else (getattr(pref, "discovery_year_to", None) if pref else None)
+        )
         if not y_from and not y_to:
             return []
-        langs = self._user_languages(pref)
+        langs = (
+            filters.preferred_languages
+            if filters and filters.preferred_languages
+            else self._user_languages(pref)
+        )
         year_label = f"{y_from or ''}-{y_to or ''}".strip("-")
         queries = [augment_search_query(f"songs {year_label}", langs)]
         if artist:
@@ -213,12 +267,26 @@ class QueueService:
         limit: int,
         recent: dict,
         extra_artists: list[str] | None = None,
+        filters: QueueRefreshFilters | None = None,
     ):
         exclude = await self._playlist_song_ids(session, user_id)
         pref = await self._get_prefs(session, user_id)
-        year_from = getattr(pref, "discovery_year_from", None) if pref else None
-        year_to = getattr(pref, "discovery_year_to", None) if pref else None
-        languages = self._user_languages(pref)
+        year_from = (
+            filters.year_from
+            if filters and filters.year_from is not None
+            else (getattr(pref, "discovery_year_from", None) if pref else None)
+        )
+        year_to = (
+            filters.year_to
+            if filters and filters.year_to is not None
+            else (getattr(pref, "discovery_year_to", None) if pref else None)
+        )
+        languages = (
+            filters.preferred_languages
+            if filters and filters.preferred_languages
+            else self._user_languages(pref)
+        )
+        skip_memory = filters.skip_memory_filter if filters else False
         return await self.recommendation.recommend(
             session,
             user_id,
@@ -231,6 +299,7 @@ class QueueService:
             year_from=year_from,
             year_to=year_to,
             preferred_languages=languages,
+            skip_memory_filter=skip_memory,
         )
 
     async def sync_queue(
@@ -322,6 +391,7 @@ class QueueService:
         seed_query: str | None = None,
         from_preferences: bool = False,
         target_size: int = TARGET_QUEUE_SIZE,
+        filters: QueueRefreshFilters | None = None,
     ) -> list[QueueItemModel]:
         """Replace upcoming tracks; keep the song now playing. Seed from search or preferences."""
         if await self._is_playlist_mode(session, user_id):
@@ -356,6 +426,7 @@ class QueueService:
             current=current,
             seed_query=seed_query,
             from_preferences=from_preferences,
+            filters=filters,
         )
 
         queue = await self.get_queue(session, user_id)
@@ -370,7 +441,8 @@ class QueueService:
             query_idx += 1
 
             candidates = await self._recommend(
-                session, user_id, query, limit=15, recent=recent, extra_artists=seed_artists
+                session, user_id, query, limit=15, recent=recent, extra_artists=seed_artists,
+                filters=filters,
             )
 
             existing = await self._queue_track_ids(queue)

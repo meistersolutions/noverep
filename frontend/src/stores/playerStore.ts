@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api, QueueItem, Track, UserPreferences } from '@/lib/api';
+import { api, QueueItem, Track, UserPreferences, QueueRefreshOptions } from '@/lib/api';
 import { recordPlayProgress, recordPlayStart } from '@/lib/playbackHistory';
 import { setWantPlaying, prepareTrackTransition, getActiveVideoId } from '@/lib/youtubePlayerController';
 
@@ -131,8 +131,8 @@ interface PlayerState {
   refreshQueue: () => Promise<void>;
   fillQueue: () => Promise<void>;
   syncQueue: () => Promise<void>;
-  refreshQueueFromSearch: (query: string) => Promise<void>;
-  refreshQueueFromPreferences: () => Promise<void>;
+  refreshQueueFromSearch: (query: string, options?: QueueRefreshOptions) => Promise<void>;
+  refreshQueueFromPreferences: (options?: QueueRefreshOptions) => Promise<void>;
   clearActiveSearchQuery: () => Promise<void>;
   playNextInsert: (track: Track, explicit?: boolean) => Promise<void>;
   playPlaylist: (playlistId: string) => Promise<void>;
@@ -248,9 +248,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
   },
 
-  refreshQueueFromSearch: async (query: string) => {
+  refreshQueueFromSearch: async (query: string, options?) => {
     if (get().playbackMode === 'playlist') return;
-    const queue = await api.refreshQueue(query);
+    const queue = await api.refreshQueue(query, options);
     const { currentTrack, isPlaying } = get();
     set({
       ...applyQueueSnapshot(queue, currentTrack, isPlaying),
@@ -260,9 +260,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
 
-  refreshQueueFromPreferences: async () => {
+  refreshQueueFromPreferences: async (options?) => {
     if (get().playbackMode === 'playlist') return;
-    const queue = await api.refreshQueueFromPreferences();
+    const queue = await api.refreshQueueFromPreferences(options);
     const { currentTrack, isPlaying } = get();
     set({
       ...applyQueueSnapshot(queue, currentTrack, isPlaying),

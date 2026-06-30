@@ -35,7 +35,7 @@ from app.application.services.home_recommendations import HomeRecommendationServ
 from app.application.services.memory_service import MemoryService
 from app.application.tasks.queue_tasks import run_queue_sync_background
 from app.application.services.playlist_service import PlaylistService
-from app.application.services.queue_service import QueueService
+from app.application.services.queue_service import QueueRefreshFilters, QueueService
 from app.application.services.recommendation_engine import RecommendationEngine
 from app.application.services.song_normalizer import SongNormalizer
 from app.application.services.statistics_service import StatisticsService
@@ -177,13 +177,19 @@ async def search(
     limit: int = Query(default=20, le=50),
     include_heard: bool = Query(default=False),
     quick: bool = Query(default=True, description="Fast search without full DB pipeline"),
+    raw: bool = Query(
+        default=True,
+        description="Literal search without user preferences (song filter only)",
+    ),
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     engine: RecommendationEngine = Depends(get_recommendation_engine),
 ):
     scored = []
     try:
-        if quick:
+        if raw:
+            scored = await engine.raw_search(q, provider_name=provider, limit=limit)
+        elif quick:
             scored = await engine.quick_search(
                 session,
                 user.id,
@@ -202,8 +208,26 @@ async def search(
                 skip_memory_filter=include_heard,
             )
     except Exception as e:
-        logger.exception("search_failed", query=q, quick=quick, error=str(e))
-        if quick:
+        logger.exception("search_failed", query=q, quick=quick, raw=raw, error=str(e))
+        if raw:
+            try:
+                scored = await engine.quick_search(
+                    session,
+                    user.id,
+                    q,
+                    provider_name=provider,
+                    limit=limit,
+                    skip_memory_filter=include_heard,
+                )
+            except Exception as fallback_err:
+                logger.exception(
+                    "search_fallback_failed", query=q, error=str(fallback_err)
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Search is temporarily unavailable. Please try again.",
+                ) from fallback_err
+        elif quick:
             try:
                 scored = await engine.recommend(
                     session,
@@ -398,17 +422,35 @@ async def play_next_in_queue(
 async def refresh_queue(
     seed: str | None = Query(default=None, description="Search query to seed upcoming tracks"),
     from_preferences: bool = Query(default=False, description="Seed from user preferences instead"),
+    languages: str | None = Query(
+        default=None, description="Comma-separated language codes for this refresh"
+    ),
+    year_from: int | None = Query(default=None, ge=1900, le=2100),
+    year_to: int | None = Query(default=None, ge=1900, le=2100),
+    include_heard: bool = Query(
+        default=False, description="Include songs heard within memory window"
+    ),
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     queue_svc: QueueService = Depends(get_queue_service),
 ):
     if from_preferences and seed:
         raise HTTPException(status_code=400, detail="Use either seed or from_preferences, not both")
+
+    lang_list = [s.strip() for s in languages.split(",") if s.strip()] if languages else None
+    filters = QueueRefreshFilters(
+        preferred_languages=lang_list,
+        year_from=year_from,
+        year_to=year_to,
+        skip_memory_filter=include_heard,
+    ) if (lang_list or year_from is not None or year_to is not None or include_heard) else None
+
     items = await queue_svc.refresh_upcoming(
         session,
         user.id,
         seed_query=seed,
         from_preferences=from_preferences,
+        filters=filters,
     )
     return [
         QueueItemResponse(

@@ -178,6 +178,46 @@ class RecommendationEngine:
 
         return scored[:limit]
 
+    async def raw_search(
+        self,
+        query: str,
+        provider_name: str = "youtube",
+        limit: int = 20,
+    ) -> list[ScoredCandidate]:
+        """Literal search — user query only, song-filter at provider (no prefs/blocks)."""
+        provider = self.providers.get(provider_name)
+        if not provider:
+            return []
+
+        search_query = query.strip()
+        if not search_query:
+            return []
+
+        try:
+            candidates = await asyncio.wait_for(
+                provider.search(search_query, limit=limit + 10, raw=True),
+                timeout=QUICK_SEARCH_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("raw_search_timeout", query=query)
+            candidates = []
+        except Exception as e:
+            logger.exception("raw_search_provider_failed", query=query, error=str(e))
+            candidates = []
+
+        seen: set[str] = set()
+        unique: list[ProviderTrack] = []
+        for track in candidates:
+            if track.provider_track_id in seen:
+                continue
+            seen.add(track.provider_track_id)
+            unique.append(track)
+
+        return [
+            ScoredCandidate(track=t, score=t.popularity, reasons={"raw": 1.0})
+            for t in unique[:limit]
+        ]
+
     async def quick_search(
         self,
         session: AsyncSession,

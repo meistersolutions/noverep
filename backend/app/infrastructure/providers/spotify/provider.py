@@ -22,7 +22,7 @@ class SpotifyProvider(MusicProvider):
     def _configured(self) -> bool:
         return bool(settings.spotify_client_id and settings.spotify_client_secret)
 
-    async def search(self, query: str, limit: int = 20) -> list[ProviderTrack]:
+    async def search(self, query: str, limit: int = 20, *, raw: bool = False) -> list[ProviderTrack]:
         if not self._configured():
             logger.warning("spotify_not_configured")
             return []

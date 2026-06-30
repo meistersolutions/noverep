@@ -42,6 +42,13 @@ export interface UserPreferences {
   active_playlist_id: string | null;
 }
 
+export interface QueueRefreshOptions {
+  languages?: string[];
+  yearFrom?: number | null;
+  yearTo?: number | null;
+  includeHeard?: boolean;
+}
+
 export interface Statistics {
   songs_played: number;
   artists_explored: number;
@@ -114,9 +121,9 @@ export const api = {
       '/auth/register',
       { method: 'POST', body: JSON.stringify({ username, password, email }) },
     ),
-  search: async (q: string, provider = 'youtube', includeHeard = false, quick = true) => {
+  search: async (q: string, provider = 'youtube', includeHeard = false, quick = true, raw = true) => {
     const buildPath = (useQuick: boolean) =>
-      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}&quick=${useQuick}`;
+      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}&quick=${useQuick}&raw=${raw}`;
     try {
       return await request<{ results: Track[]; total: number }>(buildPath(quick));
     } catch (err) {
@@ -141,10 +148,22 @@ export const api = {
   fillQueue: (minimum = 20) =>
     request<QueueItem[]>(`/queue/fill?minimum=${minimum}`, { method: 'POST' }),
   syncQueue: () => request<QueueItem[]>('/queue/sync', { method: 'POST' }),
-  refreshQueue: (seed: string) =>
-    request<QueueItem[]>(`/queue/refresh?seed=${encodeURIComponent(seed)}`, { method: 'POST' }),
-  refreshQueueFromPreferences: () =>
-    request<QueueItem[]>('/queue/refresh?from_preferences=true', { method: 'POST' }),
+  refreshQueue: (seed: string, options?: QueueRefreshOptions) => {
+    const params = new URLSearchParams({ seed });
+    if (options?.languages?.length) params.set('languages', options.languages.join(','));
+    if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
+    if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
+    if (options?.includeHeard) params.set('include_heard', 'true');
+    return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' });
+  },
+  refreshQueueFromPreferences: (options?: QueueRefreshOptions) => {
+    const params = new URLSearchParams({ from_preferences: 'true' });
+    if (options?.languages?.length) params.set('languages', options.languages.join(','));
+    if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
+    if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
+    if (options?.includeHeard) params.set('include_heard', 'true');
+    return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' });
+  },
   clearActiveSearch: () =>
     request<UserPreferences>('/preferences', {
       method: 'PATCH',

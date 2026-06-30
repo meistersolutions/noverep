@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   Home,
   Search,
+  ListMusic,
   History,
   BarChart3,
   Settings,
@@ -16,7 +17,8 @@ import { usePlayerStore } from '@/stores/playerStore';
 
 const links = [
   { to: '/', icon: Home, label: 'Home' },
-  { to: '/search', icon: Search, label: 'Search & Queue' },
+  { to: '/search', icon: Search, label: 'Search' },
+  { to: '/queue', icon: ListMusic, label: 'Queue' },
   { to: '/now-playing', icon: Disc3, label: 'Now Playing' },
   { to: '/history', icon: History, label: 'History' },
   { to: '/playlists', icon: Music2, label: 'Playlists' },

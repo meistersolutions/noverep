@@ -10,6 +10,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import AuthPage from '@/pages/AuthPage';
 import HomePage from '@/pages/HomePage';
 import SearchPage from '@/pages/SearchPage';
+import QueuePage from '@/pages/QueuePage';
 import NowPlayingPage from '@/pages/NowPlayingPage';
 import HistoryPage from '@/pages/HistoryPage';
 import PlaylistsPage from '@/pages/PlaylistsPage';
@@ -75,7 +76,7 @@ function MainApp() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/search" element={<SearchPage />} />
-          <Route path="/queue" element={<Navigate to="/search" replace />} />
+          <Route path="/queue" element={<QueuePage />} />
           <Route path="/now-playing" element={<NowPlayingPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/playlists" element={<PlaylistsPage />} />
