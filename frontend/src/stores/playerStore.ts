@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { api, QueueItem, Track, UserPreferences, QueueRefreshOptions } from '@/lib/api';
 import { recordPlayProgress, recordPlayStart } from '@/lib/playbackHistory';
-import { setWantPlaying, prepareTrackTransition, getActiveVideoId } from '@/lib/youtubePlayerController';
+import { setWantPlaying, prepareTrackTransition, getActiveVideoId, cueVideoForResume } from '@/lib/youtubePlayerController';
 
 let advancingNext = false;
 
@@ -12,6 +12,14 @@ function ensureSessionId(): string {
   const id = crypto.randomUUID();
   localStorage.setItem(key, id);
   return id;
+}
+
+function queueWithoutCurrent(queue: QueueItem[]): QueueItem[] {
+  const currentIdx = queue.findIndex((q) => q.is_current);
+  if (currentIdx < 0) return queue;
+  return queue
+    .filter((_, i) => i !== currentIdx)
+    .map((q, i) => ({ ...q, position: i, is_current: false }));
 }
 
 function localNextInQueue(queue: QueueItem[]): QueueItem | null {
@@ -294,6 +302,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   syncToActiveVideo: (videoId: string) => {
+    if (advancingNext) return;
     const { queue, currentTrack, isPlaying } = get();
     if (!isPlaying || !videoId || currentTrack?.provider_track_id === videoId) return;
     const match = queue.find((q) => q.provider_track_id === videoId);
@@ -305,10 +314,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (get().isPlaying === playing) return;
     setWantPlaying(playing);
     set({ isPlaying: playing });
-    import('@/lib/youtubePlayerController').then(({ resumePlayback, pausePlayback }) => {
-      if (playing) resumePlayback();
-      else pausePlayback();
-    });
+    import('@/lib/youtubePlayerController').then(
+      async ({ resumePlayback, pausePlayback, loadAndPlay, getActiveVideoId }) => {
+        if (playing) {
+          const track = get().currentTrack;
+          const activeId = getActiveVideoId();
+          if (track?.provider_track_id && track.provider_track_id !== activeId) {
+            await loadAndPlay(track.provider_track_id, get().volume * 100);
+          } else {
+            resumePlayback();
+          }
+        } else {
+          pausePlayback();
+        }
+      },
+    );
     if (!playing) {
       const { currentTime, duration } = get();
       if (currentTime >= 30 || (duration > 0 && currentTime / duration >= 0.5)) {
@@ -371,72 +391,101 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     try {
       const { queue, volume, sessionId, currentTrack, duration } = get();
 
-    if (manualSkip) {
-      void get().recordCurrentPlayback(true);
-    } else if (currentTrack) {
-      void recordPlayProgress(currentTrack, sessionId, duration, duration, false).then(() =>
-        get().bumpHistory(),
-      );
-    }
+      if (manualSkip) {
+        void get().recordCurrentPlayback(true);
+      } else if (currentTrack) {
+        void recordPlayProgress(currentTrack, sessionId, duration, duration, false).then(() =>
+          get().bumpHistory(),
+        );
+      }
 
-    const optimistic = localNextInQueue(queue);
+      const trimmed = queueWithoutCurrent(queue);
+      const optimistic = localNextInQueue(queue);
 
-    const playItem = (item: QueueItem, optimisticQueue?: QueueItem[]) => {
+      const playItem = (item: QueueItem, optimisticQueue: QueueItem[]) => {
+        prepareTrackTransition();
+        const updatedQueue = optimisticQueue.map((q) => ({
+          ...q,
+          is_current: q.id === item.id,
+        }));
+        set({
+          currentTrack: item,
+          isPlaying: true,
+          currentTime: 0,
+          duration: item.duration_seconds ?? 0,
+          queue: updatedQueue,
+        });
+        void beginPlayback(item, volume);
+        void recordPlayStart(item, sessionId).then(() => get().bumpHistory());
+        void prefetchUpcoming(updatedQueue);
+      };
+
+      if (optimistic) {
+        playItem(optimistic, trimmed);
+        try {
+          const serverItem = await api.nextTrack();
+          const serverQueue = await api.getQueue();
+          const track = serverItem ?? optimistic;
+          set({
+            ...applyQueueSnapshot(serverQueue, track, true),
+            isPlaying: true,
+          });
+          void prefetchUpcoming(get().queue);
+        } catch {
+          await get().refreshQueue();
+        }
+        return;
+      }
+
+      const item = await api.nextTrack();
+      if (!item) return;
+      const serverQueue = await api.getQueue();
       prepareTrackTransition();
-      const updatedQueue =
-        optimisticQueue ??
-        get().queue.map((q) => ({ ...q, is_current: q.id === item.id }));
       set({
-        currentTrack: item,
+        ...applyQueueSnapshot(serverQueue, item, true),
         isPlaying: true,
         currentTime: 0,
         duration: item.duration_seconds ?? 0,
-        queue: updatedQueue,
       });
       void beginPlayback(item, volume);
       void recordPlayStart(item, sessionId).then(() => get().bumpHistory());
-      void prefetchUpcoming(updatedQueue);
-    };
-
-    if (optimistic) {
-      const updatedQueue = queue.map((q) => ({
-        ...q,
-        is_current: q.id === optimistic.id,
-      }));
-      playItem(optimistic, updatedQueue);
-      void api
-        .nextTrack()
-        .then(() => get().refreshQueue())
-        .catch(() => get().refreshQueue());
-      return;
-    }
-
-    const item = await api.nextTrack();
-    if (!item) return;
-    playItem(item);
-    void get().refreshQueue();
+      void prefetchUpcoming(get().queue);
     } finally {
       advancingNext = false;
     }
   },
 
   previous: async () => {
-    const item = await api.previousTrack();
-    if (!item) return;
-
-    set({ currentTrack: item, isPlaying: true, currentTime: 0, duration: item.duration_seconds ?? 0 });
-
-    const { loadAndPlay } = await import('@/lib/youtubePlayerController');
-    await loadAndPlay(item.provider_track_id, get().volume * 100);
-
+    if (advancingNext) return;
+    advancingNext = true;
     try {
-      await recordPlayStart(item, get().sessionId);
-      get().bumpHistory();
-    } catch {
-      /* best-effort */
-    }
+      prepareTrackTransition();
+      const item = await api.previousTrack();
+      if (!item) return;
 
-    await get().syncQueue();
+      const aligned = alignQueueWithCurrentTrack(get().queue, item);
+      set({
+        currentTrack: item,
+        queue: aligned,
+        isPlaying: true,
+        currentTime: 0,
+        duration: item.duration_seconds ?? 0,
+      });
+
+      const { loadAndPlay } = await import('@/lib/youtubePlayerController');
+      await loadAndPlay(item.provider_track_id, get().volume * 100);
+
+      try {
+        await recordPlayStart(item, get().sessionId);
+        get().bumpHistory();
+      } catch {
+        /* best-effort */
+      }
+
+      await get().refreshQueue();
+    } finally {
+      advancingNext = false;
+    }
   },
 
   playPlaylist: async (playlistId) => {
@@ -489,9 +538,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   refreshQueue: async () => {
     const queue = await api.getQueue();
-    const { currentTrack, isPlaying } = get();
-    set(applyQueueSnapshot(queue, currentTrack, isPlaying));
-    void prefetchUpcoming(get().queue);
+    const { currentTrack, isPlaying, volume } = get();
+    const snapshot = applyQueueSnapshot(queue, currentTrack, isPlaying);
+    set(snapshot);
+    void prefetchUpcoming(snapshot.queue);
+
+    if (snapshot.currentTrack && !isPlaying) {
+      void cueVideoForResume(snapshot.currentTrack.provider_track_id, volume * 100);
+    }
   },
 
   loadPreferences: async () => {

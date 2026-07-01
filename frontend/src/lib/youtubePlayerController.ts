@@ -27,6 +27,8 @@ let activeVideoId: string | null = null;
 let prefetchedVideoId: string | null = null;
 let ignoreEndedUntil = 0;
 let wantPlaying = false;
+/** When false, ignore PAUSED events that would auto-resume (user pressed pause). */
+let allowAutoResume = true;
 let playbackGeneration = 0;
 let onNaturalEnd: (() => void) | null = null;
 let onPlayingChange: ((playing: boolean) => void) | null = null;
@@ -34,7 +36,7 @@ let onActiveVideoId: ((videoId: string) => void) | null = null;
 
 const apiWaiters: Array<() => void> = [];
 const playerWaiters: Array<() => void> = [];
-const backgroundRetryMs = [200, 400, 800, 1500, 2500, 4000, 6000, 9000, 12000];
+const backgroundRetryMs = [400, 800, 1500, 2500];
 
 function notify(waiters: Array<() => void>) {
   waiters.splice(0).forEach((cb) => cb());
@@ -95,8 +97,13 @@ export function getActiveVideoId(): string | null {
   }
 }
 
+export function isAutoResumeAllowed(): boolean {
+  return allowAutoResume && wantPlaying;
+}
+
 export function prepareTrackTransition() {
   wantPlaying = true;
+  allowAutoResume = true;
   playbackGeneration += 1;
   ignoreEndedUntil = Date.now() + 5000;
   prefetchedVideoId = null;
@@ -104,6 +111,7 @@ export function prepareTrackTransition() {
 
 export function setWantPlaying(playing: boolean) {
   wantPlaying = playing;
+  if (!playing) allowAutoResume = false;
 }
 
 export function setOnNaturalEnd(cb: (() => void) | null) {
@@ -119,7 +127,8 @@ export function setOnActiveVideoId(cb: ((videoId: string) => void) | null) {
 }
 
 function schedulePlayRetries(videoId: string, generation: number) {
-  const delays = document.hidden ? backgroundRetryMs : [400, 1200, 2500];
+  if (!allowAutoResume) return;
+  const delays = document.hidden ? backgroundRetryMs : [400, 1200];
   delays.forEach((ms) => {
     setTimeout(() => {
       if (generation !== playbackGeneration) return;
@@ -130,7 +139,8 @@ function schedulePlayRetries(videoId: string, generation: number) {
 
 function attemptPlay(videoId: string, generation = playbackGeneration) {
   if (!player || generation !== playbackGeneration) return;
-  if (activeVideoId !== videoId || !wantPlaying) return;
+  if (!allowAutoResume || !wantPlaying) return;
+  if (activeVideoId !== videoId) return;
   const state = player.getPlayerState?.();
   if (state !== YT_PLAYING) {
     player.playVideo();
@@ -151,6 +161,32 @@ export function prefetchVideo(videoId: string) {
   }
 }
 
+/** After reload: load video into player paused so play button works. */
+export async function cueVideoForResume(videoId: string, volume = 80): Promise<void> {
+  await waitForYouTubeApi();
+  await waitForPlayer();
+  if (!player || !videoId) return;
+
+  playbackGeneration += 1;
+  wantPlaying = false;
+  allowAutoResume = false;
+  activeVideoId = videoId;
+  prefetchedVideoId = null;
+  player.setVolume(volume);
+
+  try {
+    const state = player.getPlayerState?.();
+    const loadedId = player.getVideoData?.()?.video_id;
+    if (loadedId === videoId && (state === YT_PAUSED || state === YT_CUED || state === YT_PLAYING)) {
+      if (state === YT_PLAYING) player.pauseVideo();
+      return;
+    }
+    player.cueVideoById(videoId);
+  } catch {
+    player.cueVideoById(videoId);
+  }
+}
+
 /** YouTube fires ENDED when switching videos – ignore those spurious events. */
 export function handlePlayerStateChange(state: number, target: YTPlayerInstance) {
   if (state === YT_PLAYING) {
@@ -162,7 +198,7 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
   }
 
   if (state === YT_PAUSED) {
-    if (wantPlaying) {
+    if (allowAutoResume && wantPlaying) {
       attemptPlay(activeVideoId ?? '');
       return;
     }
@@ -175,7 +211,7 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
     if (videoId && videoId === prefetchedVideoId && isActivelyPlaying()) {
       return;
     }
-    if (wantPlaying && videoId === activeVideoId) {
+    if (allowAutoResume && wantPlaying && videoId === activeVideoId) {
       attemptPlay(videoId);
     }
     return;
@@ -190,6 +226,7 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
     if (duration > 0 && current < Math.min(duration * 0.9, duration - 5)) return;
 
     wantPlaying = false;
+    allowAutoResume = false;
     onPlayingChange?.(false);
     onNaturalEnd?.();
   }
@@ -202,6 +239,7 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
 
   const generation = ++playbackGeneration;
   wantPlaying = true;
+  allowAutoResume = true;
   ignoreEndedUntil = Date.now() + 5000;
   player.setVolume(volume);
 
@@ -223,12 +261,15 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
 
 export function pausePlayback() {
   wantPlaying = false;
+  allowAutoResume = false;
   playbackGeneration += 1;
   player?.pauseVideo();
 }
 
 export function resumePlayback() {
-  if (!player || !activeVideoId || !wantPlaying) return;
+  if (!player || !activeVideoId) return;
+  wantPlaying = true;
+  allowAutoResume = true;
   const state = player.getPlayerState?.();
   if (state === YT_PLAYING) return;
   player.playVideo();

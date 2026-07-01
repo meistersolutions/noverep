@@ -707,7 +707,9 @@ class QueueService:
         if current_idx > 0:
             queue[current_idx].is_current = False
             queue[current_idx - 1].is_current = True
+            await session.flush()
             return queue[current_idx - 1]
+        await session.flush()
         return queue[0] if queue else None
 
     async def ensure_queue_size(

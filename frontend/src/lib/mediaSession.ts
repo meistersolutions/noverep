@@ -1,4 +1,6 @@
 import type { Track } from '@/lib/api';
+import { seekPlayback } from '@/lib/youtubePlayerController';
+import { usePlayerStore } from '@/stores/playerStore';
 
 export function updateMediaSession(track: Track | null, isPlaying: boolean) {
   if (!('mediaSession' in navigator)) return;
@@ -30,12 +32,25 @@ export function setupMediaSessionHandlers(handlers: {
 }) {
   if (!('mediaSession' in navigator)) return;
 
-  try {
-    navigator.mediaSession.setActionHandler('play', () => handlers.play());
-    navigator.mediaSession.setActionHandler('pause', () => handlers.pause());
-    navigator.mediaSession.setActionHandler('nexttrack', () => handlers.next());
-    navigator.mediaSession.setActionHandler('previoustrack', () => handlers.previous());
-  } catch {
-    /* some browsers reject certain handlers */
-  }
+  const seekBy = (delta: number) => {
+    const { currentTime, duration } = usePlayerStore.getState();
+    const next = Math.max(0, Math.min(duration || 0, currentTime + delta));
+    seekPlayback(next);
+    usePlayerStore.getState().setCurrentTime(next);
+  };
+
+  const setHandler = (action: MediaSessionAction, fn: (() => void) | null) => {
+    try {
+      navigator.mediaSession.setActionHandler(action, fn);
+    } catch {
+      /* unsupported on this browser */
+    }
+  };
+
+  setHandler('play', () => handlers.play());
+  setHandler('pause', () => handlers.pause());
+  setHandler('nexttrack', () => handlers.next());
+  setHandler('previoustrack', () => handlers.previous());
+  setHandler('seekbackward', () => seekBy(-10));
+  setHandler('seekforward', () => seekBy(10));
 }

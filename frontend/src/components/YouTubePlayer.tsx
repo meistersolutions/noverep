@@ -71,10 +71,13 @@ export function YouTubePlayer() {
 
   useEffect(() => {
     setupMediaSessionHandlers({
-      play: () => usePlayerStore.getState().setPlaying(true),
+      play: () => {
+        const { currentTrack, setPlaying } = usePlayerStore.getState();
+        if (currentTrack) setPlaying(true);
+      },
       pause: () => usePlayerStore.getState().setPlaying(false),
-      next: () => usePlayerStore.getState().next(),
-      previous: () => usePlayerStore.getState().previous(),
+      next: () => void usePlayerStore.getState().next(),
+      previous: () => void usePlayerStore.getState().previous(),
     });
 
     return initBackgroundPlayback(() => usePlayerStore.getState().isPlaying);

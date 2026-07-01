@@ -1,12 +1,12 @@
-import { resumePlayback } from '@/lib/youtubePlayerController';
+import { isAutoResumeAllowed, resumePlayback } from '@/lib/youtubePlayerController';
 import { isNativeApp } from '@/lib/nativePlatform';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let wakeLock: WakeLockSentinel | null = null;
 let appStateListener: { remove: () => void } | null = null;
 
-/** Native shells suspend WebViews aggressively — retry more often. */
-const KEEP_ALIVE_MS = isNativeApp ? 500 : 1000;
+/** Native shells suspend WebViews aggressively — retry occasionally while playing. */
+const KEEP_ALIVE_MS = isNativeApp ? 2000 : 3000;
 
 async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
@@ -28,15 +28,14 @@ async function releaseWakeLock() {
 }
 
 function resumeIfPlaying(getIsPlaying: () => boolean) {
-  if (getIsPlaying()) {
-    resumePlayback();
-  }
+  if (!getIsPlaying() || !isAutoResumeAllowed()) return;
+  resumePlayback();
 }
 
 function startKeepAlive(getIsPlaying: () => boolean) {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => {
-    if (getIsPlaying() && document.hidden) {
+    if (document.hidden && getIsPlaying() && isAutoResumeAllowed()) {
       resumePlayback();
     }
   }, KEEP_ALIVE_MS);
@@ -58,7 +57,7 @@ async function bindCapacitorAppState(getIsPlaying: () => boolean) {
       if (isActive) {
         resumeIfPlaying(getIsPlaying);
         stopKeepAlive();
-      } else if (getIsPlaying()) {
+      } else if (getIsPlaying() && isAutoResumeAllowed()) {
         resumePlayback();
         startKeepAlive(getIsPlaying);
       }
@@ -73,7 +72,7 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
 
   const onVisibility = () => {
     if (document.hidden) {
-      if (getIsPlaying()) {
+      if (getIsPlaying() && isAutoResumeAllowed()) {
         resumePlayback();
         startKeepAlive(getIsPlaying);
         requestWakeLock();
@@ -104,7 +103,7 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
 export function onPlaybackStateChange(isPlaying: boolean, getIsPlaying: () => boolean) {
   if (isPlaying) {
     requestWakeLock();
-    if (document.hidden) startKeepAlive(getIsPlaying);
+    if (document.hidden && isAutoResumeAllowed()) startKeepAlive(getIsPlaying);
   } else {
     stopKeepAlive();
     releaseWakeLock();
