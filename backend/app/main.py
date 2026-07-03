@@ -79,6 +79,12 @@ async def lifespan(app: FastAPI):
             text("ALTER TABLE playlists ADD COLUMN IF NOT EXISTS system_key VARCHAR(50)")
         )
         await conn.execute(
+            text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS admin_response TEXT")
+        )
+        await conn.execute(
+            text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS responded_at TIMESTAMPTZ")
+        )
+        await conn.execute(
             text(
                 "ALTER TABLE user_preferences "
                 "ADD COLUMN IF NOT EXISTS active_playlist_id UUID REFERENCES playlists(id)"

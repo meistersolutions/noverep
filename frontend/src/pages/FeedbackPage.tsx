@@ -11,6 +11,8 @@ interface FeedbackItem {
   title: string;
   status: string;
   created_at: string;
+  admin_response: string | null;
+  responded_at: string | null;
 }
 
 export default function FeedbackPage() {
@@ -135,17 +137,30 @@ export default function FeedbackPage() {
         <section className="space-y-3">
           <h3 className="font-semibold">Your recent submissions</h3>
           {history.map((item) => (
-            <div key={item.id} className="glass p-4 flex justify-between items-start gap-4">
-              <div>
-                <p className="font-medium">{item.title}</p>
-                <p className="text-xs text-white/40 mt-1">
-                  {item.feedback_type === 'bug' ? 'Issue' : 'Feature'} ·{' '}
-                  {new Date(item.created_at).toLocaleDateString()}
-                </p>
+            <div key={item.id} className="glass p-4 space-y-3">
+              <div className="flex justify-between items-start gap-4">
+                <div>
+                  <p className="font-medium">{item.title}</p>
+                  <p className="text-xs text-white/40 mt-1">
+                    {item.feedback_type === 'bug' ? 'Issue' : 'Feature'} ·{' '}
+                    {new Date(item.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <span className="text-xs px-2 py-1 rounded-full bg-white/10 capitalize shrink-0">
+                  {item.status.replace('_', ' ')}
+                </span>
               </div>
-              <span className="text-xs px-2 py-1 rounded-full bg-white/10 capitalize">
-                {item.status}
-              </span>
+              {item.admin_response && (
+                <div className="bg-accent/10 border border-accent/20 rounded-lg p-3">
+                  <p className="text-xs text-accent font-medium mb-1">Team response</p>
+                  <p className="text-sm text-white/80 whitespace-pre-wrap">{item.admin_response}</p>
+                  {item.responded_at && (
+                    <p className="text-[10px] text-white/40 mt-2">
+                      {new Date(item.responded_at).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </section>

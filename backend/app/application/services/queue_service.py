@@ -226,6 +226,26 @@ class QueueService:
     async def _queue_track_ids(self, queue: list[QueueItemModel]) -> set[str]:
         return {q.provider_track_id for q in queue}
 
+    async def _queue_song_ids(self, queue: list[QueueItemModel]) -> set[UUID]:
+        return {q.song_id for q in queue}
+
+    async def _dedupe_queue(self, session: AsyncSession, queue: list[QueueItemModel]) -> list[QueueItemModel]:
+        """Remove duplicate tracks/songs from queue, keeping the earliest row (and current)."""
+        seen_tracks: set[str] = set()
+        seen_songs: set[UUID] = set()
+        kept: list[QueueItemModel] = []
+        for item in sorted(queue, key=lambda q: (not q.is_current, q.position)):
+            if item.provider_track_id in seen_tracks or item.song_id in seen_songs:
+                await session.delete(item)
+                continue
+            seen_tracks.add(item.provider_track_id)
+            seen_songs.add(item.song_id)
+            kept.append(item)
+        for i, item in enumerate(kept):
+            item.position = i
+        await session.flush()
+        return kept
+
     async def _is_playlist_mode(self, session: AsyncSession, user_id: UUID) -> bool:
         pref = await self._get_prefs(session, user_id)
         return bool(pref and getattr(pref, "playback_mode", "discovery") == "playlist")
@@ -361,11 +381,17 @@ class QueueService:
             )
 
             existing = await self._queue_track_ids(queue)
+            existing_songs = await self._queue_song_ids(queue)
             added_any = False
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
                 if candidate.track.provider_track_id in existing:
+                    continue
+                if (
+                    candidate.track.canonical_song_id
+                    and candidate.track.canonical_song_id in existing_songs
+                ):
                     continue
                 try:
                     item = await self._append_track(
@@ -373,6 +399,7 @@ class QueueService:
                     )
                     queue.append(item)
                     existing.add(item.provider_track_id)
+                    existing_songs.add(item.song_id)
                     added_any = True
                 except ValueError:
                     continue
@@ -380,6 +407,7 @@ class QueueService:
                 break
 
         await session.flush()
+        queue = await self._dedupe_queue(session, queue)
         logger.info("queue_synced", user_id=str(user_id), size=len(queue))
         return queue
 
@@ -446,11 +474,17 @@ class QueueService:
             )
 
             existing = await self._queue_track_ids(queue)
+            existing_songs = await self._queue_song_ids(queue)
             added_any = False
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
                 if candidate.track.provider_track_id in existing:
+                    continue
+                if (
+                    candidate.track.canonical_song_id
+                    and candidate.track.canonical_song_id in existing_songs
+                ):
                     continue
                 try:
                     is_first = len(queue) == 0
@@ -463,6 +497,7 @@ class QueueService:
                     )
                     queue.append(item)
                     existing.add(item.provider_track_id)
+                    existing_songs.add(item.song_id)
                     added_any = True
                 except ValueError:
                     continue
@@ -473,6 +508,7 @@ class QueueService:
             queue[0].is_current = True
 
         await session.flush()
+        queue = await self._dedupe_queue(session, queue)
         source = (
             "preferences"
             if from_preferences
@@ -503,10 +539,16 @@ class QueueService:
                 session, user_id, query, limit=15, recent=recent
             )
             existing = await self._queue_track_ids(queue)
+            existing_songs = await self._queue_song_ids(queue)
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
                 if candidate.track.provider_track_id in existing:
+                    continue
+                if (
+                    candidate.track.canonical_song_id
+                    and candidate.track.canonical_song_id in existing_songs
+                ):
                     continue
                 try:
                     is_first = len(queue) == 0
@@ -519,8 +561,10 @@ class QueueService:
                     )
                     queue.append(item)
                     existing.add(item.provider_track_id)
+                    existing_songs.add(item.song_id)
                 except ValueError:
                     continue
+        queue = await self._dedupe_queue(session, queue)
         return queue
 
     async def _append_track(
@@ -678,6 +722,9 @@ class QueueService:
 
         await session.flush()
         current_item = queue[new_current_idx]
+
+        queue = await self._dedupe_queue(session, queue)
+        current_item = next((q for q in queue if q.is_current), current_item)
 
         if defer_sync:
             return current_item

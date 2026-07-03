@@ -152,8 +152,7 @@ export function QueueSection({
   };
 
   const handleSkip = async () => {
-    await next();
-    navigate('/now-playing');
+    await next(true);
   };
 
   const handleRefresh = async () => {

@@ -276,6 +276,8 @@ class FeedbackModel(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open")
+    admin_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (Index("ix_feedback_created", "created_at"),)

@@ -226,6 +226,8 @@ class FeedbackResponse(BaseModel):
     title: str
     status: str
     created_at: datetime
+    admin_response: str | None = None
+    responded_at: datetime | None = None
 
 
 class StatisticsResponse(BaseModel):

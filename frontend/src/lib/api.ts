@@ -301,8 +301,31 @@ export const api = {
   }) => request('/feedback', { method: 'POST', body: JSON.stringify(data) }),
   getMyFeedback: () =>
     request<
-      { id: string; feedback_type: string; title: string; status: string; created_at: string }[]
+      {
+        id: string;
+        feedback_type: string;
+        title: string;
+        status: string;
+        created_at: string;
+        admin_response: string | null;
+        responded_at: string | null;
+      }[]
     >('/feedback/mine'),
+  adminListFeedback: (params?: { status?: string; type?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set('status', params.status);
+    if (params?.type) q.set('feedback_type', params.type);
+    const qs = q.toString();
+    return request<AdminFeedback[]>(`/admin/feedback${qs ? `?${qs}` : ''}`);
+  },
+  adminRespondFeedback: (
+    feedbackId: string,
+    data: { status?: string; admin_response?: string },
+  ) =>
+    request<AdminFeedback>(`/admin/feedback/${feedbackId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
   adminListUsers: () => request<AdminUser[]>('/admin/users'),
   adminStats: () =>
     request<{ total_users: number; guest_users: number; admin_users: number }>('/admin/stats'),
@@ -324,6 +347,20 @@ export interface AdminUser {
   first_used_at: string;
   last_used_at: string | null;
   songs_played_count: number;
+}
+
+export interface AdminFeedback {
+  id: string;
+  feedback_type: 'bug' | 'feature';
+  title: string;
+  description: string;
+  contact_email: string | null;
+  status: string;
+  created_at: string;
+  username: string | null;
+  user_email: string | null;
+  admin_response: string | null;
+  responded_at: string | null;
 }
 
 export function formatAdminDateTime(iso: string | null): string {

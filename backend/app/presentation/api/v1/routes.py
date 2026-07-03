@@ -1068,6 +1068,8 @@ async def my_feedback(
             title=f.title,
             status=f.status,
             created_at=f.created_at,
+            admin_response=f.admin_response,
+            responded_at=f.responded_at,
         )
         for f in result.scalars()
     ]

@@ -14,12 +14,28 @@ function ensureSessionId(): string {
   return id;
 }
 
-function queueWithoutCurrent(queue: QueueItem[]): QueueItem[] {
-  const currentIdx = queue.findIndex((q) => q.is_current);
+function queueWithoutCurrent(queue: QueueItem[], currentTrack?: QueueItem | Track | null): QueueItem[] {
+  let currentIdx = queue.findIndex((q) => q.is_current);
+  if (currentIdx < 0 && currentTrack) {
+    if ('id' in currentTrack && currentTrack.id) {
+      currentIdx = queue.findIndex((q) => q.id === currentTrack.id);
+    } else {
+      currentIdx = queue.findIndex((q) => q.provider_track_id === currentTrack.provider_track_id);
+    }
+  }
   if (currentIdx < 0) return queue;
   return queue
     .filter((_, i) => i !== currentIdx)
     .map((q, i) => ({ ...q, position: i, is_current: false }));
+}
+
+function dedupeQueue(queue: QueueItem[]): QueueItem[] {
+  const seenTracks = new Set<string>();
+  return queue.filter((q) => {
+    if (seenTracks.has(q.provider_track_id)) return false;
+    seenTracks.add(q.provider_track_id);
+    return true;
+  });
 }
 
 function localNextInQueue(queue: QueueItem[]): QueueItem | null {
@@ -57,9 +73,12 @@ function mergeCurrentTrackFromQueue(
     return fromQueue;
   }
   const clientId = currentTrack.provider_track_id;
+  const inQueue = queue.some((q) => q.provider_track_id === clientId);
   const serverId = fromQueue?.provider_track_id;
-  if (serverId && serverId !== clientId) {
-    // Client advanced optimistically — server queue may still show the previous song.
+  if (!inQueue && fromQueue) {
+    return fromQueue;
+  }
+  if (serverId && serverId !== clientId && inQueue) {
     return currentTrack;
   }
   const match = queue.find((q) => q.provider_track_id === clientId);
@@ -69,7 +88,7 @@ function mergeCurrentTrackFromQueue(
       thumbnail_url: match.thumbnail_url || currentTrack.thumbnail_url,
     };
   }
-  return currentTrack;
+  return fromQueue ?? currentTrack;
 }
 
 function applyQueueSnapshot(
@@ -77,18 +96,32 @@ function applyQueueSnapshot(
   currentTrack: QueueItem | Track | null,
   isPlaying: boolean,
 ): { queue: QueueItem[]; currentTrack: QueueItem | Track | null } {
+  const deduped = dedupeQueue(queue);
   let track = currentTrack;
-  if (isPlaying) {
+  if (isPlaying && !advancingNext) {
     const activeId = getActiveVideoId();
     if (activeId) {
-      const fromPlayer = queue.find((q) => q.provider_track_id === activeId);
+      const fromPlayer = deduped.find((q) => q.provider_track_id === activeId);
       if (fromPlayer) track = fromPlayer;
     }
   }
-  const merged = mergeCurrentTrackFromQueue(queue, track, isPlaying);
+  const merged = mergeCurrentTrackFromQueue(deduped, track, isPlaying);
+  const aligned = alignQueueWithCurrentTrack(deduped, merged);
   return {
-    queue: alignQueueWithCurrentTrack(queue, merged),
+    queue: aligned,
     currentTrack: merged,
+  };
+}
+
+function applyServerQueueAfterSkip(serverQueue: QueueItem[], serverItem: QueueItem) {
+  const deduped = dedupeQueue(serverQueue);
+  const aligned = alignQueueWithCurrentTrack(deduped, serverItem);
+  return {
+    queue: aligned,
+    currentTrack: serverItem,
+    isPlaying: true,
+    currentTime: 0,
+    duration: serverItem.duration_seconds ?? 0,
   };
 }
 
@@ -399,7 +432,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         );
       }
 
-      const trimmed = queueWithoutCurrent(queue);
+      const trimmed = queueWithoutCurrent(queue, currentTrack);
       const optimistic = localNextInQueue(queue);
 
       const playItem = (item: QueueItem, optimisticQueue: QueueItem[]) => {
@@ -425,11 +458,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         try {
           const serverItem = await api.nextTrack();
           const serverQueue = await api.getQueue();
-          const track = serverItem ?? optimistic;
-          set({
-            ...applyQueueSnapshot(serverQueue, track, true),
-            isPlaying: true,
-          });
+          if (serverItem) {
+            set(applyServerQueueAfterSkip(serverQueue, serverItem));
+          } else {
+            await get().refreshQueue();
+          }
           void prefetchUpcoming(get().queue);
         } catch {
           await get().refreshQueue();
@@ -441,12 +474,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (!item) return;
       const serverQueue = await api.getQueue();
       prepareTrackTransition();
-      set({
-        ...applyQueueSnapshot(serverQueue, item, true),
-        isPlaying: true,
-        currentTime: 0,
-        duration: item.duration_seconds ?? 0,
-      });
+      set(applyServerQueueAfterSkip(serverQueue, item));
       void beginPlayback(item, volume);
       void recordPlayStart(item, sessionId).then(() => get().bumpHistory());
       void prefetchUpcoming(get().queue);
