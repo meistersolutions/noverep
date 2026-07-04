@@ -171,14 +171,14 @@ class RecommendationEngine:
                 if not t.canonical_song_id or t.canonical_song_id not in exclude_song_ids
             ]
 
-        # 5c. Year range filter (MusicBrainz / canonical year when available)
+        # 5c. Year range filter — drop only tracks with a known year outside the range
         if year_from or year_to:
             y_min = year_from or 1900
             y_max = year_to or 2100
             filtered = [
                 t
                 for t in filtered
-                if t.release_year is not None and y_min <= t.release_year <= y_max
+                if t.release_year is None or (y_min <= t.release_year <= y_max)
             ]
 
         # 6. Score

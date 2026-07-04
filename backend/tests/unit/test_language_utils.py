@@ -54,12 +54,9 @@ def test_filter_excludes_other_language_titles():
     assert any("Tamil" in t or "Enna" in t for t in titles)
 
 
-def test_strict_single_language_rejects_unknown_title():
-    assert not track_matches_languages(_track("Random Song Title", "Unknown"), ["tamil"])
+def test_single_language_allows_unmarked_titles_without_conflict():
+    assert track_matches_languages(_track("Kalaimane - Thalam", "Hariharan"), ["tamil"])
     assert track_matches_languages(_track("Enna Solla — Tamil Song"), ["tamil"])
-
-
-def test_artist_language_hint_excludes_hindi_artist_for_tamil():
     assert not track_matches_languages(_track("Tum Hi Ho", "Arijit Singh"), ["tamil"])
 
 

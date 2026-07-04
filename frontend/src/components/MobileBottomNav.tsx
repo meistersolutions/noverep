@@ -3,9 +3,9 @@ import { NavLink } from 'react-router-dom';
 import clsx from 'clsx';
 
 const tabs = [
-  { to: '/', icon: Home, label: 'Home' },
+  { to: '/', icon: ListMusic, label: 'Queue' },
+  { to: '/home', icon: Home, label: 'Home' },
   { to: '/search', icon: Search, label: 'Search' },
-  { to: '/queue', icon: ListMusic, label: 'Queue' },
   { to: '/now-playing', icon: Disc3, label: 'Playing' },
   { to: '/profile', icon: Menu, label: 'More' },
 ];

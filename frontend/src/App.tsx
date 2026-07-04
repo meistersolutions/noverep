@@ -74,9 +74,10 @@ function MainApp() {
       <Sidebar />
       <main className="flex-1 p-4 md:p-6 overflow-auto w-full max-w-full">
         <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/search" element={<SearchPage />} />
+          <Route path="/" element={<QueuePage />} />
+          <Route path="/home" element={<HomePage />} />
           <Route path="/queue" element={<QueuePage />} />
+          <Route path="/search" element={<SearchPage />} />
           <Route path="/now-playing" element={<NowPlayingPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/playlists" element={<PlaylistsPage />} />

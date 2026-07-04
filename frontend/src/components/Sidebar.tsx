@@ -16,9 +16,9 @@ import clsx from 'clsx';
 import { usePlayerStore } from '@/stores/playerStore';
 
 const links = [
-  { to: '/', icon: Home, label: 'Home' },
+  { to: '/', icon: ListMusic, label: 'Queue' },
+  { to: '/home', icon: Home, label: 'Home' },
   { to: '/search', icon: Search, label: 'Search' },
-  { to: '/queue', icon: ListMusic, label: 'Queue' },
   { to: '/now-playing', icon: Disc3, label: 'Now Playing' },
   { to: '/history', icon: History, label: 'History' },
   { to: '/playlists', icon: Music2, label: 'Playlists' },

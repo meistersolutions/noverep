@@ -282,24 +282,28 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         const playing = get().isPlaying && get().currentTrack;
         if (get().playbackMode === 'playlist') {
           if (!playing) await get().refreshQueue();
-        } else {
-          void api.syncQueue().then((queue) => {
-            if (!queue?.length) return;
-            const { currentTrack, isPlaying } = get();
-            const snapshot = applyQueueSnapshot(queue, currentTrack, isPlaying);
-            set({ queue: snapshot.queue, currentTrack: snapshot.currentTrack });
+          return;
+        }
+
+        let queue = await api.syncQueue();
+        if (!queue?.length) {
+          queue = await api.refreshQueueFromPreferences();
+        }
+        if (queue?.length) {
+          const snapshot = applyQueueSnapshot(queue, get().currentTrack, playing);
+          set(snapshot);
+          void prefetchUpcoming(snapshot.queue);
+        }
+      } catch {
+        try {
+          const queue = await api.getQueue();
+          if (queue?.length) {
+            const snapshot = applyQueueSnapshot(queue, get().currentTrack, false);
+            set(snapshot);
             void prefetchUpcoming(snapshot.queue);
-          }).catch(() => {});
-          if (!playing) {
-            try {
-              const queue = await api.getQueue();
-              const snapshot = applyQueueSnapshot(queue, get().currentTrack, false);
-              set(snapshot);
-              void prefetchUpcoming(snapshot.queue);
-            } catch {
-              /* best-effort */
-            }
           }
+        } catch {
+          /* best-effort */
         }
       } finally {
         set({ queueBuilding: false });

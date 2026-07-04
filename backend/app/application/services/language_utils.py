@@ -221,7 +221,10 @@ def track_matches_languages(track: ProviderTrack, languages: list[str]) -> bool:
         cfg = SUPPORTED_LANGUAGES[only]
         if _title_has_pattern(title, cfg["exclude"]):
             return False
-        return False
+        # Search is already language-scoped; keep unless artist signals another language.
+        if artist_langs:
+            return only in artist_langs
+        return True
 
     if detected:
         return bool(detected & allowed)
