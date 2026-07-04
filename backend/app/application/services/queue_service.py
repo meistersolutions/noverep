@@ -13,6 +13,7 @@ from app.application.services.language_utils import (
 )
 from app.application.services.memory_service import MemoryService
 from app.application.services.recommendation_engine import RecommendationEngine
+from app.application.services.song_matcher import is_same_song
 from app.application.services.song_normalizer import SongNormalizer
 from app.domain.entities import ProviderTrack
 from app.infrastructure.database.models import (
@@ -236,6 +237,24 @@ class QueueService:
         kept: list[QueueItemModel] = []
         for item in sorted(queue, key=lambda q: (not q.is_current, q.position)):
             if item.provider_track_id in seen_tracks or item.song_id in seen_songs:
+                await session.delete(item)
+                continue
+            semantic_dup = next(
+                (
+                    existing
+                    for existing in kept
+                    if is_same_song(
+                        item.title,
+                        item.artist,
+                        item.duration_seconds,
+                        existing.title,
+                        existing.artist,
+                        existing.duration_seconds,
+                    )
+                ),
+                None,
+            )
+            if semantic_dup:
                 await session.delete(item)
                 continue
             seen_tracks.add(item.provider_track_id)

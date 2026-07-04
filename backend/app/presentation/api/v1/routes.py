@@ -75,6 +75,21 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 
+def _queue_item_response(item) -> QueueItemResponse:
+    return QueueItemResponse(
+        id=item.id,
+        provider=item.provider,
+        provider_track_id=item.provider_track_id,
+        title=item.title,
+        artist=item.artist,
+        album=item.album,
+        thumbnail_url=item.thumbnail_url,
+        duration_seconds=item.duration_seconds,
+        position=item.position,
+        is_current=item.is_current,
+        canonical_song_id=getattr(item, "song_id", None),
+    )
+
 def _track_response(track, score: float | None = None) -> TrackResponse:
     title = (track.title or "Unknown").strip() or "Unknown"
     artist = (track.artist or "Unknown Artist").strip() or "Unknown Artist"
@@ -261,21 +276,7 @@ async def get_queue(
     queue_svc: QueueService = Depends(get_queue_service),
 ):
     items = await queue_svc.get_queue(session, user.id)
-    return [
-        QueueItemResponse(
-            id=i.id,
-            provider=i.provider,
-            provider_track_id=i.provider_track_id,
-            title=i.title,
-            artist=i.artist,
-            album=i.album,
-            thumbnail_url=i.thumbnail_url,
-            duration_seconds=i.duration_seconds,
-            position=i.position,
-            is_current=i.is_current,
-        )
-        for i in items
-    ]
+    return [_queue_item_response(i) for i in items]
 
 
 @router.post("/queue", response_model=QueueItemResponse)
@@ -298,18 +299,7 @@ async def add_to_queue(
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return QueueItemResponse(
-        id=item.id,
-        provider=item.provider,
-        provider_track_id=item.provider_track_id,
-        title=item.title,
-        artist=item.artist,
-        album=item.album,
-        thumbnail_url=item.thumbnail_url,
-        duration_seconds=item.duration_seconds,
-        position=item.position,
-        is_current=item.is_current,
-    )
+    return _queue_item_response(item)
 
 
 @router.post("/queue/next", response_model=QueueItemResponse | None)
@@ -325,18 +315,7 @@ async def queue_next(
         background_tasks.add_task(run_queue_sync_background, user.id)
     if not item:
         return None
-    return QueueItemResponse(
-        id=item.id,
-        provider=item.provider,
-        provider_track_id=item.provider_track_id,
-        title=item.title,
-        artist=item.artist,
-        album=item.album,
-        thumbnail_url=item.thumbnail_url,
-        duration_seconds=item.duration_seconds,
-        position=item.position,
-        is_current=item.is_current,
-    )
+    return _queue_item_response(item)
 
 
 @router.post("/queue/previous", response_model=QueueItemResponse | None)
@@ -348,18 +327,7 @@ async def queue_previous(
     item = await queue_svc.previous_track(session, user.id)
     if not item:
         return None
-    return QueueItemResponse(
-        id=item.id,
-        provider=item.provider,
-        provider_track_id=item.provider_track_id,
-        title=item.title,
-        artist=item.artist,
-        album=item.album,
-        thumbnail_url=item.thumbnail_url,
-        duration_seconds=item.duration_seconds,
-        position=item.position,
-        is_current=item.is_current,
-    )
+    return _queue_item_response(item)
 
 
 @router.post("/queue/play/{item_id}", response_model=QueueItemResponse)
@@ -372,18 +340,7 @@ async def play_queue_item(
     item = await queue_svc.play_queue_item(session, user.id, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Queue item not found")
-    return QueueItemResponse(
-        id=item.id,
-        provider=item.provider,
-        provider_track_id=item.provider_track_id,
-        title=item.title,
-        artist=item.artist,
-        album=item.album,
-        thumbnail_url=item.thumbnail_url,
-        duration_seconds=item.duration_seconds,
-        position=item.position,
-        is_current=item.is_current,
-    )
+    return _queue_item_response(item)
 
 
 @router.post("/queue/play-next", response_model=QueueItemResponse)
@@ -404,18 +361,7 @@ async def play_next_in_queue(
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return QueueItemResponse(
-        id=item.id,
-        provider=item.provider,
-        provider_track_id=item.provider_track_id,
-        title=item.title,
-        artist=item.artist,
-        album=item.album,
-        thumbnail_url=item.thumbnail_url,
-        duration_seconds=item.duration_seconds,
-        position=item.position,
-        is_current=item.is_current,
-    )
+    return _queue_item_response(item)
 
 
 @router.post("/queue/refresh", response_model=list[QueueItemResponse])
@@ -452,21 +398,7 @@ async def refresh_queue(
         from_preferences=from_preferences,
         filters=filters,
     )
-    return [
-        QueueItemResponse(
-            id=i.id,
-            provider=i.provider,
-            provider_track_id=i.provider_track_id,
-            title=i.title,
-            artist=i.artist,
-            album=i.album,
-            thumbnail_url=i.thumbnail_url,
-            duration_seconds=i.duration_seconds,
-            position=i.position,
-            is_current=i.is_current,
-        )
-        for i in items
-    ]
+    return [_queue_item_response(i) for i in items]
 
 
 @router.post("/queue/sync", response_model=list[QueueItemResponse])
@@ -476,21 +408,7 @@ async def sync_queue(
     queue_svc: QueueService = Depends(get_queue_service),
 ):
     items = await queue_svc.sync_queue(session, user.id)
-    return [
-        QueueItemResponse(
-            id=i.id,
-            provider=i.provider,
-            provider_track_id=i.provider_track_id,
-            title=i.title,
-            artist=i.artist,
-            album=i.album,
-            thumbnail_url=i.thumbnail_url,
-            duration_seconds=i.duration_seconds,
-            position=i.position,
-            is_current=i.is_current,
-        )
-        for i in items
-    ]
+    return [_queue_item_response(i) for i in items]
 
 
 @router.post("/queue/fill")
@@ -502,21 +420,7 @@ async def fill_queue(
 ):
     await queue_svc.ensure_queue_size(session, user.id, minimum=minimum)
     items = await queue_svc.get_queue(session, user.id)
-    return [
-        QueueItemResponse(
-            id=i.id,
-            provider=i.provider,
-            provider_track_id=i.provider_track_id,
-            title=i.title,
-            artist=i.artist,
-            album=i.album,
-            thumbnail_url=i.thumbnail_url,
-            duration_seconds=i.duration_seconds,
-            position=i.position,
-            is_current=i.is_current,
-        )
-        for i in items
-    ]
+    return [_queue_item_response(i) for i in items]
 
 
 @router.delete("/queue")
@@ -939,21 +843,7 @@ async def play_playlist(
     if not tracks:
         raise HTTPException(status_code=400, detail="Playlist is empty")
     items = await queue_svc.load_playlist_queue(session, user.id, playlist_id, tracks)
-    return [
-        QueueItemResponse(
-            id=i.id,
-            provider=i.provider,
-            provider_track_id=i.provider_track_id,
-            title=i.title,
-            artist=i.artist,
-            album=i.album,
-            thumbnail_url=i.thumbnail_url,
-            duration_seconds=i.duration_seconds,
-            position=i.position,
-            is_current=i.is_current,
-        )
-        for i in items
-    ]
+    return [_queue_item_response(i) for i in items]
 
 
 @router.get("/me")

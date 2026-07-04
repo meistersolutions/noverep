@@ -1,10 +1,16 @@
-import re
-import unicodedata
 from hashlib import sha256
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.services.song_matcher import (
+    extract_core_title,
+    is_same_song,
+    match_score,
+    normalize_text as semantic_normalize_text,
+    token_set,
+)
 from app.domain.entities import ProviderTrack
 from app.domain.interfaces import SongNormalizerPort
 from app.infrastructure.database.models import (
@@ -21,18 +27,18 @@ from app.infrastructure.providers.youtube.metadata_utils import (
 
 
 def _normalize_text(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text.lower())
-    text = re.sub(r"[^\w\s]", "", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return semantic_normalize_text(text)
 
 
 class SongNormalizer(SongNormalizerPort):
-    """Maps provider tracks to canonical songs via normalized keys."""
+    """Maps provider tracks to canonical songs via normalized + semantic keys."""
 
     DURATION_TOLERANCE = 5  # seconds
+    SEMANTIC_MATCH_THRESHOLD = 0.82
 
     def normalize_key(self, title: str, artist: str, duration_seconds: int | None) -> str:
-        base = f"{_normalize_text(artist)}|{_normalize_text(title)}"
+        core_title = extract_core_title(title, artist)
+        base = f"{_normalize_text(artist)}|{_normalize_text(core_title)}"
         if duration_seconds:
             bucket = duration_seconds // self.DURATION_TOLERANCE
             base = f"{base}|{bucket}"
@@ -55,6 +61,12 @@ class SongNormalizer(SongNormalizerPort):
             await self._ensure_provider_mapping(session, song, track)
             return song
 
+        song = await self._find_semantic_match(session, track)
+        if song:
+            await self._upgrade_song_metadata(session, song, track)
+            await self._ensure_provider_mapping(session, song, track)
+            return song
+
         artist_result = await session.execute(
             select(ArtistModel).where(ArtistModel.normalized_name == _normalize_text(track.artist))
         )
@@ -66,7 +78,7 @@ class SongNormalizer(SongNormalizerPort):
 
         song = SongModel(
             title=track.title,
-            normalized_title=_normalize_text(track.title),
+            normalized_title=_normalize_text(extract_core_title(track.title, track.artist)),
             artist_id=artist.id,
             duration_seconds=track.duration_seconds,
             language=track.language,
@@ -93,6 +105,73 @@ class SongNormalizer(SongNormalizerPort):
             )
         )
         return result.scalar_one_or_none()
+
+    async def _find_semantic_match(
+        self, session: AsyncSession, track: ProviderTrack
+    ) -> SongModel | None:
+        core_title = extract_core_title(track.title, track.artist)
+        title_tokens = sorted(token_set(core_title), key=len, reverse=True)
+        artist_tokens = sorted(token_set(track.artist), key=len, reverse=True)
+
+        candidates: dict[UUID, SongModel] = {}
+
+        for token in title_tokens[:4]:
+            if len(token) < 3:
+                continue
+            result = await session.execute(
+                select(SongModel).where(SongModel.normalized_title.contains(token)).limit(50)
+            )
+            for song in result.scalars():
+                candidates[song.id] = song
+
+        for token in artist_tokens[:3]:
+            if len(token) < 3:
+                continue
+            artists = await session.execute(
+                select(ArtistModel).where(ArtistModel.normalized_name.contains(token)).limit(15)
+            )
+            for artist in artists.scalars():
+                songs = await session.execute(
+                    select(SongModel).where(SongModel.artist_id == artist.id).limit(50)
+                )
+                for song in songs.scalars():
+                    candidates[song.id] = song
+
+        if not candidates:
+            return None
+
+        artist_ids = {song.artist_id for song in candidates.values() if song.artist_id}
+        artist_names: dict[UUID, str] = {}
+        if artist_ids:
+            rows = await session.execute(select(ArtistModel).where(ArtistModel.id.in_(artist_ids)))
+            for artist in rows.scalars():
+                artist_names[artist.id] = artist.name
+
+        best: SongModel | None = None
+        best_score = 0.0
+        for song in candidates.values():
+            song_artist = artist_names.get(song.artist_id, "") if song.artist_id else ""
+            score = match_score(
+                track.title,
+                track.artist,
+                track.duration_seconds,
+                song.title,
+                song_artist,
+                song.duration_seconds,
+            )
+            if score >= self.SEMANTIC_MATCH_THRESHOLD and score > best_score:
+                if is_same_song(
+                    track.title,
+                    track.artist,
+                    track.duration_seconds,
+                    song.title,
+                    song_artist,
+                    song.duration_seconds,
+                    threshold=self.SEMANTIC_MATCH_THRESHOLD,
+                ):
+                    best_score = score
+                    best = song
+        return best
 
     async def _upgrade_song_metadata(
         self, session: AsyncSession, song: SongModel, track: ProviderTrack

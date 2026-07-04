@@ -7,6 +7,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.services.memory_service import MemoryService
+from app.application.services.song_matcher import is_same_song
 from app.application.services.song_normalizer import SongNormalizer
 from app.domain.entities import ProviderTrack, RecommendationWeights, ScoredCandidate
 from app.domain.interfaces import MusicProvider
@@ -113,13 +114,27 @@ class RecommendationEngine:
             song = await self.normalizer.resolve_canonical(track, session)
             track.canonical_song_id = song.id
 
-        # 3. Remove duplicates (same canonical song)
+        # 3. Remove duplicates (same canonical song or semantically same track)
         seen: set[UUID] = set()
         unique: list[ProviderTrack] = []
         for track in candidates:
-            if track.canonical_song_id and track.canonical_song_id not in seen:
+            if track.canonical_song_id and track.canonical_song_id in seen:
+                continue
+            if any(
+                is_same_song(
+                    track.title,
+                    track.artist,
+                    track.duration_seconds,
+                    kept.title,
+                    kept.artist,
+                    kept.duration_seconds,
+                )
+                for kept in unique
+            ):
+                continue
+            if track.canonical_song_id:
                 seen.add(track.canonical_song_id)
-                unique.append(track)
+            unique.append(track)
 
         # 4. Memory filter – remove blocked songs (unless include heard / allow replays)
         if skip_memory_filter:

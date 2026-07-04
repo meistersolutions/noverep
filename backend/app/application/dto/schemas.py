@@ -56,6 +56,7 @@ class QueueItemResponse(BaseModel):
     duration_seconds: int | None
     position: int
     is_current: bool
+    canonical_song_id: UUID | None = None
 
 
 class AddToQueueRequest(BaseModel):

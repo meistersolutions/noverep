@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, QueueItem, Track, UserPreferences, QueueRefreshOptions } from '@/lib/api';
+import { isSameSong } from '@/lib/songMatcher';
 import { recordPlayProgress, recordPlayStart } from '@/lib/playbackHistory';
 import { setWantPlaying, prepareTrackTransition, getActiveVideoId, cueVideoForResume } from '@/lib/youtubePlayerController';
 
@@ -31,11 +32,31 @@ function queueWithoutCurrent(queue: QueueItem[], currentTrack?: QueueItem | Trac
 
 function dedupeQueue(queue: QueueItem[]): QueueItem[] {
   const seenTracks = new Set<string>();
-  return queue.filter((q) => {
-    if (seenTracks.has(q.provider_track_id)) return false;
+  const seenSongs = new Set<string>();
+  const kept: QueueItem[] = [];
+
+  for (const q of queue) {
+    if (seenTracks.has(q.provider_track_id)) continue;
+    if (q.canonical_song_id && seenSongs.has(q.canonical_song_id)) continue;
+    if (
+      kept.some((existing) =>
+        isSameSong(
+          q.title,
+          q.artist,
+          q.duration_seconds,
+          existing.title,
+          existing.artist,
+          existing.duration_seconds,
+        ),
+      )
+    ) {
+      continue;
+    }
     seenTracks.add(q.provider_track_id);
-    return true;
-  });
+    if (q.canonical_song_id) seenSongs.add(q.canonical_song_id);
+    kept.push(q);
+  }
+  return kept;
 }
 
 function localNextInQueue(queue: QueueItem[]): QueueItem | null {
