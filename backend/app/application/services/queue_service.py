@@ -107,14 +107,14 @@ class QueueService:
             return [
                 self._seed_from_track(current.artist, pref),
                 augment_search_query(f"{current.artist} similar songs", langs),
-                self._build_seed_query(pref, filters=filters),
+                augment_search_query(self._build_seed_query(pref, filters=filters), langs),
                 *self._year_queries(pref, current.artist, filters=filters),
-                random_lang_discovery_query(random.choice(langs)),
+                random_lang_discovery_query(langs[0] if len(langs) == 1 else random.choice(langs)),
             ]
 
         return [
-            self._build_seed_query(pref, filters=filters),
-            random_lang_discovery_query(random.choice(langs)),
+            augment_search_query(self._build_seed_query(pref, filters=filters), langs),
+            random_lang_discovery_query(langs[0] if len(langs) == 1 else random.choice(langs)),
         ]
 
     async def _persist_active_search(

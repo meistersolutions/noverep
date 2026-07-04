@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, LyricsLine, Track } from '@/lib/api';
+import {
+  getCachedTrackDetails,
+  getCachedTrackLyrics,
+  setCachedTrackDetails,
+  setCachedTrackLyrics,
+  trackCacheKey,
+} from '@/lib/trackMetadataCache';
 import { usePlayerStore } from '@/stores/playerStore';
 
 interface LyricsPanelProps {
@@ -19,51 +26,101 @@ function activeLineIndex(lines: LyricsLine[], currentTimeSec: number): number {
 }
 
 export function LyricsPanel({ track }: LyricsPanelProps) {
-  const [lines, setLines] = useState<LyricsLine[]>([]);
-  const [synced, setSynced] = useState(false);
-  const [instrumental, setInstrumental] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [missing, setMissing] = useState(false);
+  const cacheKey = trackCacheKey(track.provider, track.provider_track_id);
+  const initialLyrics = getCachedTrackLyrics(cacheKey);
+  const [lines, setLines] = useState<LyricsLine[]>(
+    () => (initialLyrics && initialLyrics !== 'missing' ? initialLyrics.lines : []),
+  );
+  const [synced, setSynced] = useState(
+    () => (initialLyrics && initialLyrics !== 'missing' ? initialLyrics.synced : false),
+  );
+  const [instrumental, setInstrumental] = useState(
+    () => (initialLyrics && initialLyrics !== 'missing' ? initialLyrics.instrumental : false),
+  );
+  const [loading, setLoading] = useState(() => initialLyrics === undefined);
+  const [missing, setMissing] = useState(() => initialLyrics === 'missing');
   const currentTime = usePlayerStore((s) => s.currentTime);
   const containerRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<(HTMLParagraphElement | null)[]>([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setMissing(false);
-    setLines([]);
+    useEffect(() => {
+    const cached = getCachedTrackLyrics(cacheKey);
+    if (cached !== undefined) {
+      if (cached === 'missing') {
+        setMissing(true);
+        setLoading(false);
+      } else {
+        setLines(cached.lines);
+        setSynced(cached.synced);
+        setInstrumental(cached.instrumental);
+        setMissing(false);
+        setLoading(false);
+      }
+      return;
+    }
 
-    api
-      .getTrackLyrics({
-        provider: track.provider,
-        provider_track_id: track.provider_track_id,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        duration_seconds: track.duration_seconds,
-      })
-      .then((data) => {
+    let cancelled = false;
+
+    const loadLyrics = async () => {
+      setLoading(true);
+      setMissing(false);
+      setLines([]);
+
+      let details = getCachedTrackDetails(cacheKey);
+      if (!details) {
+        try {
+          details = await api.getTrackDetails(
+            track.provider,
+            track.provider_track_id,
+            false,
+            track.title,
+            track.artist,
+          );
+          setCachedTrackDetails(cacheKey, details);
+        } catch {
+          details = undefined;
+        }
+      }
+
+      const title = details?.song_name || track.title;
+      const artist = details?.performed_by?.[0] || details?.artist || track.artist;
+      const album = details?.movie_name || track.album;
+
+      try {
+        const data = await api.getTrackLyrics({
+          provider: track.provider,
+          provider_track_id: track.provider_track_id,
+          title,
+          artist,
+          album,
+          duration_seconds: track.duration_seconds,
+        });
         if (cancelled) return;
         if (!data || (!data.lines.length && !data.instrumental)) {
+          setCachedTrackLyrics(cacheKey, 'missing');
           setMissing(true);
           return;
         }
+        setCachedTrackLyrics(cacheKey, data);
         setLines(data.lines);
         setSynced(data.synced);
         setInstrumental(data.instrumental);
-      })
-      .catch(() => {
-        if (!cancelled) setMissing(true);
-      })
-      .finally(() => {
+      } catch {
+        if (!cancelled) {
+          setCachedTrackLyrics(cacheKey, 'missing');
+          setMissing(true);
+        }
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+
+    void loadLyrics();
 
     return () => {
       cancelled = true;
     };
-  }, [track.provider, track.provider_track_id, track.title, track.artist, track.album, track.duration_seconds]);
+  }, [cacheKey, track.provider, track.provider_track_id, track.title, track.artist, track.album, track.duration_seconds]);
 
   const activeIdx = useMemo(
     () => (synced ? activeLineIndex(lines, currentTime) : -1),
@@ -84,7 +141,13 @@ export function LyricsPanel({ track }: LyricsPanelProps) {
     );
   }
 
-  if (missing) return null;
+  if (missing) {
+    return (
+      <div className="w-full max-w-md mt-6 glass rounded-xl p-4 text-sm text-white/40">
+        Lyrics not available for this track
+      </div>
+    );
+  }
 
   if (instrumental) {
     return (

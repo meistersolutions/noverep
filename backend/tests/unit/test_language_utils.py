@@ -54,9 +54,13 @@ def test_filter_excludes_other_language_titles():
     assert any("Tamil" in t or "Enna" in t for t in titles)
 
 
-def test_track_matches_tamil_excludes_telugu_marker():
-    assert not track_matches_languages(_track("Ilaiyaraaja Telugu Hits"), ["tamil"])
-    assert track_matches_languages(_track("Ilaiyaraaja Tamil melody"), ["tamil"])
+def test_strict_single_language_rejects_unknown_title():
+    assert not track_matches_languages(_track("Random Song Title", "Unknown"), ["tamil"])
+    assert track_matches_languages(_track("Enna Solla — Tamil Song"), ["tamil"])
+
+
+def test_artist_language_hint_excludes_hindi_artist_for_tamil():
+    assert not track_matches_languages(_track("Tum Hi Ho", "Arijit Singh"), ["tamil"])
 
 
 def test_resolve_languages_from_prefs_list():

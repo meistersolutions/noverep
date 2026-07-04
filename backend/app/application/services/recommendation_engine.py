@@ -9,12 +9,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.services.memory_service import MemoryService
 from app.application.services.song_matcher import is_same_song
 from app.application.services.song_normalizer import SongNormalizer
+from app.infrastructure.database.models import SongModel
 from app.domain.entities import ProviderTrack, RecommendationWeights, ScoredCandidate
 from app.domain.interfaces import MusicProvider
 
 logger = structlog.get_logger()
 
 QUICK_SEARCH_TIMEOUT_SEC = 50.0
+
+
+def _effective_release_year(song: SongModel, track: ProviderTrack) -> int | None:
+    meta = song.enrichment_metadata or {}
+    mb_year = meta.get("release_year")
+    if isinstance(mb_year, int):
+        return mb_year
+    if song.release_year:
+        return song.release_year
+    return track.release_year
 
 
 def _safe_lower(value: str | None) -> str:
@@ -113,6 +124,9 @@ class RecommendationEngine:
         for track in candidates:
             song = await self.normalizer.resolve_canonical(track, session)
             track.canonical_song_id = song.id
+            resolved_year = _effective_release_year(song, track)
+            if resolved_year:
+                track.release_year = resolved_year
 
         # 3. Remove duplicates (same canonical song or semantically same track)
         seen: set[UUID] = set()
@@ -157,17 +171,15 @@ class RecommendationEngine:
                 if not t.canonical_song_id or t.canonical_song_id not in exclude_song_ids
             ]
 
-        # 5c. Year range filter
+        # 5c. Year range filter (MusicBrainz / canonical year when available)
         if year_from or year_to:
             y_min = year_from or 1900
             y_max = year_to or 2100
-            in_range = [
+            filtered = [
                 t
                 for t in filtered
-                if t.release_year is None or (y_min <= t.release_year <= y_max)
+                if t.release_year is not None and y_min <= t.release_year <= y_max
             ]
-            if in_range:
-                filtered = in_range
 
         # 6. Score
         weights = await self.get_weights(session, user_id)

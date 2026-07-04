@@ -84,6 +84,8 @@ export default function NowPlayingPage() {
       <SongDetailsPanel
         provider={track.provider}
         providerTrackId={track.provider_track_id}
+        title={track.title}
+        artist={track.artist}
       />
       <LyricsPanel track={track as Track} />
     </div>

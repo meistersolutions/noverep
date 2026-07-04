@@ -84,35 +84,89 @@ class LyricsService:
         *,
         cached_only: bool = False,
     ) -> TrackLyrics | None:
-        params: dict[str, str | int] = {
-            "track_name": title.strip() or "Unknown",
-            "artist_name": artist.strip() or "Unknown",
-        }
+        from app.application.services.song_matcher import extract_core_title
+
+        search_title = extract_core_title(title, artist)
+        attempts: list[dict[str, str | int]] = [
+            {
+                "track_name": search_title,
+                "artist_name": artist.strip() or "Unknown",
+            }
+        ]
         if album:
-            params["album_name"] = album.strip()
+            attempts[0]["album_name"] = album.strip()
         if duration_seconds and duration_seconds > 0:
-            params["duration"] = duration_seconds
+            attempts[0]["duration"] = duration_seconds
+
+        attempts.append(
+            {
+                "track_name": search_title,
+                "artist_name": artist.strip() or "Unknown",
+            }
+        )
+        if title.strip() and title.strip() != search_title:
+            attempts.append(
+                {
+                    "track_name": title.strip(),
+                    "artist_name": artist.strip() or "Unknown",
+                }
+            )
 
         endpoint = "/get-cached" if cached_only else "/get"
+        for params in attempts:
+            result = await self._request_lyrics(endpoint, params)
+            if result:
+                return result
+            if not cached_only:
+                result = await self._request_lyrics("/get-cached", params)
+                if result:
+                    return result
+
+        if not cached_only:
+            search_result = await self._search_lyrics(search_title, artist, album)
+            if search_result:
+                return search_result
+
+        return None
+
+    async def _request_lyrics(
+        self, endpoint: str, params: dict[str, str | int]
+    ) -> TrackLyrics | None:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(f"{self.BASE_URL}{endpoint}", params=params)
                 if response.status_code == 404:
-                    if not cached_only:
-                        return await self.fetch_lyrics(
-                            title,
-                            artist,
-                            album,
-                            duration_seconds,
-                            cached_only=True,
-                        )
                     return None
                 response.raise_for_status()
                 data = response.json()
         except Exception:
-            logger.exception("lyrics_fetch_failed", title=title, artist=artist)
+            return None
+        return self._parse_payload(data)
+
+    async def _search_lyrics(
+        self, title: str, artist: str, album: str | None
+    ) -> TrackLyrics | None:
+        params: dict[str, str] = {
+            "track_name": title,
+            "artist_name": artist,
+        }
+        if album:
+            params["album_name"] = album
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(f"{self.BASE_URL}/search", params=params)
+                if response.status_code != 200:
+                    return None
+                items = response.json()
+        except Exception:
+            logger.exception("lyrics_search_failed", title=title, artist=artist)
             return None
 
+        if not isinstance(items, list) or not items:
+            return None
+        return self._parse_payload(items[0])
+
+    def _parse_payload(self, data: dict) -> TrackLyrics | None:
         synced_raw = (data.get("syncedLyrics") or "").strip()
         plain_raw = (data.get("plainLyrics") or "").strip()
         instrumental = bool(data.get("instrumental"))

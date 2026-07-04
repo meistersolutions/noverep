@@ -1,31 +1,67 @@
 import { useEffect, useState } from 'react';
 import { api, SongDetails } from '@/lib/api';
+import {
+  getCachedTrackDetails,
+  setCachedTrackDetails,
+  trackCacheKey,
+} from '@/lib/trackMetadataCache';
 
 interface SongDetailsPanelProps {
   provider: string;
   providerTrackId: string;
+  title?: string;
+  artist?: string;
 }
 
-export function SongDetailsPanel({ provider, providerTrackId }: SongDetailsPanelProps) {
-  const [details, setDetails] = useState<SongDetails | null>(null);
+export function SongDetailsPanel({
+  provider,
+  providerTrackId,
+  title,
+  artist,
+}: SongDetailsPanelProps) {
+  const cacheKey = trackCacheKey(provider, providerTrackId);
+  const [details, setDetails] = useState<SongDetails | null>(
+    () => getCachedTrackDetails(cacheKey) ?? null,
+  );
+  const [loading, setLoading] = useState(() => !getCachedTrackDetails(cacheKey));
 
   useEffect(() => {
+    const cached = getCachedTrackDetails(cacheKey);
+    if (cached) {
+      setDetails(cached);
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
-    setDetails(null);
+    setLoading(true);
 
     api
-      .getTrackDetails(provider, providerTrackId)
+      .getTrackDetails(provider, providerTrackId, false, title, artist)
       .then((data) => {
-        if (!cancelled) setDetails(data);
+        if (cancelled) return;
+        setCachedTrackDetails(cacheKey, data);
+        setDetails(data);
       })
       .catch(() => {
         if (!cancelled) setDetails(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [provider, providerTrackId]);
+  }, [cacheKey, provider, providerTrackId, title, artist]);
+
+  if (loading && !details) {
+    return (
+      <div className="w-full max-w-md mt-6 glass rounded-xl p-4 text-sm text-white/40">
+        Loading song details…
+      </div>
+    );
+  }
 
   if (!details) return null;
 

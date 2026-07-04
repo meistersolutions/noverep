@@ -128,7 +128,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error(formatApiError(err.detail) || res.statusText);
   }
   if (res.status === 204) return undefined as T;
-  return res.json();
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 export const api = {
@@ -160,12 +162,20 @@ export const api = {
     }
   },
   getQueue: () => request<QueueItem[]>('/queue'),
-  getTrackDetails: (provider: string, providerTrackId: string, refresh = false) => {
+  getTrackDetails: (
+    provider: string,
+    providerTrackId: string,
+    refresh = false,
+    title?: string,
+    artist?: string,
+  ) => {
     const params = new URLSearchParams({
       provider,
       provider_track_id: providerTrackId,
       refresh: String(refresh),
     });
+    if (title) params.set('title', title);
+    if (artist) params.set('artist', artist);
     return request<SongDetails>(`/tracks/details?${params}`);
   },
   getTrackLyrics: (args: {

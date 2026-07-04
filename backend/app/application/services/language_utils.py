@@ -187,6 +187,20 @@ def detect_title_languages(title: str) -> set[str]:
     return found
 
 
+def detect_artist_languages(artist: str) -> set[str]:
+    if not artist:
+        return set()
+    lower = artist.lower()
+    found: set[str] = set()
+    for code, names in RANDOM_ARTISTS.items():
+        for name in names:
+            n = name.lower()
+            if n in lower or lower in n:
+                found.add(code)
+                break
+    return found
+
+
 def track_matches_languages(track: ProviderTrack, languages: list[str]) -> bool:
     """Keep tracks aligned with preferred language; drop other-language variants."""
     if not languages or len(languages) >= len(SUPPORTED_LANGUAGES):
@@ -194,8 +208,21 @@ def track_matches_languages(track: ProviderTrack, languages: list[str]) -> bool:
 
     title = f"{track.title} {track.artist or ''}"
     detected = detect_title_languages(title)
-
     allowed = set(languages)
+
+    artist_langs = detect_artist_languages(track.artist or "")
+    if artist_langs and not (artist_langs & allowed):
+        return False
+
+    if len(languages) == 1:
+        only = languages[0]
+        if detected:
+            return only in detected
+        cfg = SUPPORTED_LANGUAGES[only]
+        if _title_has_pattern(title, cfg["exclude"]):
+            return False
+        return False
+
     if detected:
         return bool(detected & allowed)
 

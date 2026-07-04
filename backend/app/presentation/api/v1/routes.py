@@ -61,6 +61,7 @@ from app.dependencies import (
 )
 from app.infrastructure.auth.auth_service import AuthService, create_access_token
 from app.infrastructure.database.models import (
+    ArtistModel,
     FeedbackModel,
     ListeningHistoryModel,
     PlaylistModel,
@@ -282,6 +283,8 @@ async def track_details(
     background_tasks: BackgroundTasks,
     provider: str = Query(default="youtube"),
     provider_track_id: str = Query(..., min_length=1),
+    title: str | None = None,
+    artist: str | None = None,
     refresh: bool = False,
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
@@ -289,16 +292,66 @@ async def track_details(
     normalizer: SongNormalizer = Depends(get_normalizer),
     enrichment: SongEnrichmentService = Depends(get_enrichment_service),
 ):
+    from app.domain.entities import ProviderTrack
+
     provider_impl = providers.get(provider)
     if not provider_impl:
         raise HTTPException(status_code=400, detail="Unknown provider")
 
+    track: ProviderTrack | None = None
+    song = await normalizer._find_by_provider_track(
+        session,
+        ProviderTrack(
+            provider=provider,
+            provider_track_id=provider_track_id,
+            title=title or "",
+            artist=artist or "",
+            album=None,
+            duration_seconds=None,
+            thumbnail_url=None,
+        ),
+    )
+
+    if song and song.enrichment_metadata and not refresh:
+        metadata = song.enrichment_metadata
+        artist_name = artist or ""
+        if not artist_name and song.artist_id:
+            artist_row = await session.execute(
+                select(ArtistModel).where(ArtistModel.id == song.artist_id)
+            )
+            artist_model = artist_row.scalar_one_or_none()
+            artist_name = artist_model.name if artist_model else ""
+        return SongDetailsResponse(
+            title=title or song.title,
+            artist=artist_name,
+            album=None,
+            song_name=metadata.get("song_name") or song.title,
+            composed_by=list(metadata.get("composed_by") or []),
+            performed_by=list(metadata.get("performed_by") or []),
+            movie_name=metadata.get("movie_name"),
+            release_year=metadata.get("release_year") or song.release_year,
+            musicbrainz_id=metadata.get("musicbrainz_id") or song.musicbrainz_id,
+            canonical_song_id=song.id,
+        )
+
     try:
         track = await provider_impl.get_metadata(provider_track_id)
     except Exception as e:
-        raise HTTPException(status_code=404, detail="Track not found") from e
+        if not song:
+            raise HTTPException(status_code=404, detail="Track not found") from e
+        track = ProviderTrack(
+            provider=provider,
+            provider_track_id=provider_track_id,
+            title=title or song.title,
+            artist=artist or "",
+            album=None,
+            duration_seconds=song.duration_seconds,
+            thumbnail_url=None,
+        )
 
-    song = await normalizer.resolve_canonical(track, session)
+    if not song:
+        song = await normalizer.resolve_canonical(track, session)
+
     enriched = None
     if settings.musicbrainz_enabled:
         enriched = await enrichment.get_for_song(
@@ -307,17 +360,6 @@ async def track_details(
             track,
             refresh=refresh,
         )
-        if not enriched and refresh:
-            background_tasks.add_task(
-                run_song_enrichment_background,
-                song.id,
-                track.provider,
-                track.provider_track_id,
-                track.title,
-                track.artist,
-                track.album,
-                track.duration_seconds,
-            )
 
     metadata = enriched.to_dict() if enriched else (song.enrichment_metadata or {})
     return SongDetailsResponse(
@@ -345,28 +387,52 @@ async def track_lyrics(
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     providers=Depends(get_providers),
+    normalizer: SongNormalizer = Depends(get_normalizer),
     lyrics_svc=Depends(get_lyrics_service),
 ):
     if not settings.lrclib_enabled:
-        return None
+        raise HTTPException(status_code=404, detail="Lyrics disabled")
 
-    provider_impl = providers.get(provider)
-    if provider_impl:
-        try:
-            track = await provider_impl.get_metadata(provider_track_id)
-            title = title or track.title
-            artist = artist or track.artist
-            album = album or track.album
-            duration_seconds = duration_seconds or track.duration_seconds
-        except Exception:
-            pass
+    if not title or not artist:
+        provider_impl = providers.get(provider)
+        if provider_impl:
+            try:
+                track = await provider_impl.get_metadata(provider_track_id)
+                title = title or track.title
+                artist = artist or track.artist
+                album = album or track.album
+                duration_seconds = duration_seconds or track.duration_seconds
+            except Exception:
+                pass
 
     if not title or not artist:
         raise HTTPException(status_code=400, detail="title and artist are required")
 
+    from app.domain.entities import ProviderTrack
+
+    song = await normalizer._find_by_provider_track(
+        session,
+        ProviderTrack(
+            provider=provider,
+            provider_track_id=provider_track_id,
+            title=title,
+            artist=artist,
+            album=album,
+            duration_seconds=duration_seconds,
+            thumbnail_url=None,
+        ),
+    )
+    if song and song.enrichment_metadata:
+        meta = song.enrichment_metadata
+        title = meta.get("song_name") or title
+        performed = meta.get("performed_by") or []
+        if performed:
+            artist = performed[0]
+        album = meta.get("movie_name") or album
+
     result = await lyrics_svc.fetch_lyrics(title, artist, album, duration_seconds)
     if not result:
-        return None
+        raise HTTPException(status_code=404, detail="Lyrics not found")
 
     return LyricsResponse(
         synced=result.synced,
