@@ -59,6 +59,32 @@ class QueueItemResponse(BaseModel):
     canonical_song_id: UUID | None = None
 
 
+class SongDetailsResponse(BaseModel):
+    title: str
+    artist: str
+    album: str | None = None
+    song_name: str | None = None
+    composed_by: list[str] = Field(default_factory=list)
+    performed_by: list[str] = Field(default_factory=list)
+    movie_name: str | None = None
+    release_year: int | None = None
+    musicbrainz_id: str | None = None
+    canonical_song_id: UUID | None = None
+
+
+class LyricsLineResponse(BaseModel):
+    time_ms: int
+    text: str
+
+
+class LyricsResponse(BaseModel):
+    synced: bool
+    plain: str | None = None
+    lines: list[LyricsLineResponse] = Field(default_factory=list)
+    instrumental: bool = False
+    source: str = "lrclib"
+
+
 class AddToQueueRequest(BaseModel):
     provider: str = "youtube"
     provider_track_id: str

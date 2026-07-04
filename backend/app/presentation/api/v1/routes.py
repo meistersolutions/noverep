@@ -19,12 +19,15 @@ from app.application.dto.schemas import (
     OnboardingRequest,
     PlayEventRequest,
     LikedStatusResponse,
+    LyricsLineResponse,
+    LyricsResponse,
     PlaylistDetailResponse,
     PlaylistResponse,
     PlaylistTrackResponse,
     QueueItemResponse,
     RegisterRequest,
     SearchResponse,
+    SongDetailsResponse,
     StatisticsResponse,
     TokenResponse,
     TrackResponse,
@@ -37,12 +40,17 @@ from app.application.tasks.queue_tasks import run_queue_sync_background
 from app.application.services.playlist_service import PlaylistService
 from app.application.services.queue_service import QueueRefreshFilters, QueueService
 from app.application.services.recommendation_engine import RecommendationEngine
+from app.application.services.song_enrichment_service import SongEnrichmentService
 from app.application.services.song_normalizer import SongNormalizer
 from app.application.services.statistics_service import StatisticsService
+from app.application.tasks.enrichment_tasks import run_song_enrichment_background
+from app.config import settings
 from app.dependencies import (
     get_auth_service,
     get_current_user,
+    get_enrichment_service,
     get_home_recommendations_service,
+    get_lyrics_service,
     get_memory_service,
     get_normalizer,
     get_playlist_service,
@@ -269,6 +277,106 @@ async def search(
     return SearchResponse(query=q, results=results, total=len(results))
 
 
+@router.get("/tracks/details", response_model=SongDetailsResponse)
+async def track_details(
+    background_tasks: BackgroundTasks,
+    provider: str = Query(default="youtube"),
+    provider_track_id: str = Query(..., min_length=1),
+    refresh: bool = False,
+    user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    providers=Depends(get_providers),
+    normalizer: SongNormalizer = Depends(get_normalizer),
+    enrichment: SongEnrichmentService = Depends(get_enrichment_service),
+):
+    provider_impl = providers.get(provider)
+    if not provider_impl:
+        raise HTTPException(status_code=400, detail="Unknown provider")
+
+    try:
+        track = await provider_impl.get_metadata(provider_track_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="Track not found") from e
+
+    song = await normalizer.resolve_canonical(track, session)
+    enriched = None
+    if settings.musicbrainz_enabled:
+        enriched = await enrichment.get_for_song(
+            session,
+            song.id,
+            track,
+            refresh=refresh,
+        )
+        if not enriched and refresh:
+            background_tasks.add_task(
+                run_song_enrichment_background,
+                song.id,
+                track.provider,
+                track.provider_track_id,
+                track.title,
+                track.artist,
+                track.album,
+                track.duration_seconds,
+            )
+
+    metadata = enriched.to_dict() if enriched else (song.enrichment_metadata or {})
+    return SongDetailsResponse(
+        title=track.title,
+        artist=track.artist,
+        album=track.album,
+        song_name=metadata.get("song_name") or song.title,
+        composed_by=list(metadata.get("composed_by") or []),
+        performed_by=list(metadata.get("performed_by") or []),
+        movie_name=metadata.get("movie_name"),
+        release_year=metadata.get("release_year") or song.release_year,
+        musicbrainz_id=metadata.get("musicbrainz_id") or song.musicbrainz_id,
+        canonical_song_id=song.id,
+    )
+
+
+@router.get("/tracks/lyrics", response_model=LyricsResponse | None)
+async def track_lyrics(
+    provider: str = Query(default="youtube"),
+    provider_track_id: str = Query(..., min_length=1),
+    title: str | None = None,
+    artist: str | None = None,
+    album: str | None = None,
+    duration_seconds: int | None = None,
+    user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    providers=Depends(get_providers),
+    lyrics_svc=Depends(get_lyrics_service),
+):
+    if not settings.lrclib_enabled:
+        return None
+
+    provider_impl = providers.get(provider)
+    if provider_impl:
+        try:
+            track = await provider_impl.get_metadata(provider_track_id)
+            title = title or track.title
+            artist = artist or track.artist
+            album = album or track.album
+            duration_seconds = duration_seconds or track.duration_seconds
+        except Exception:
+            pass
+
+    if not title or not artist:
+        raise HTTPException(status_code=400, detail="title and artist are required")
+
+    result = await lyrics_svc.fetch_lyrics(title, artist, album, duration_seconds)
+    if not result:
+        return None
+
+    return LyricsResponse(
+        synced=result.synced,
+        plain=result.plain,
+        lines=[LyricsLineResponse(time_ms=line.time_ms, text=line.text) for line in result.lines],
+        instrumental=result.instrumental,
+        source=result.source,
+    )
+
+
 @router.get("/queue", response_model=list[QueueItemResponse])
 async def get_queue(
     user: UserModel = Depends(get_current_user),
@@ -282,6 +390,7 @@ async def get_queue(
 @router.post("/queue", response_model=QueueItemResponse)
 async def add_to_queue(
     body: AddToQueueRequest,
+    background_tasks: BackgroundTasks,
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     providers=Depends(get_providers),
@@ -299,6 +408,17 @@ async def add_to_queue(
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    if settings.musicbrainz_enabled and item.song_id:
+        background_tasks.add_task(
+            run_song_enrichment_background,
+            item.song_id,
+            item.provider,
+            item.provider_track_id,
+            item.title,
+            item.artist,
+            item.album,
+            item.duration_seconds,
+        )
     return _queue_item_response(item)
 
 
@@ -436,6 +556,7 @@ async def clear_queue(
 @router.post("/playback/event")
 async def record_playback(
     body: PlayEventRequest,
+    background_tasks: BackgroundTasks,
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     memory: MemoryService = Depends(get_memory_service),
@@ -493,6 +614,17 @@ async def record_playback(
         )
 
     song = await normalizer.resolve_canonical(track, session)
+    if settings.musicbrainz_enabled and body.duration_listened == 0:
+        background_tasks.add_task(
+            run_song_enrichment_background,
+            song.id,
+            track.provider,
+            track.provider_track_id,
+            track.title,
+            track.artist,
+            track.album,
+            track.duration_seconds,
+        )
     entry = await memory.record_play(
         session,
         user_id=user.id,

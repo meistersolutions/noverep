@@ -90,6 +90,9 @@ async def lifespan(app: FastAPI):
                 "ADD COLUMN IF NOT EXISTS active_playlist_id UUID REFERENCES playlists(id)"
             )
         )
+        await conn.execute(
+            text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS enrichment_metadata JSONB")
+        )
         # Seed providers
         await conn.execute(
             text(

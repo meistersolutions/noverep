@@ -2,6 +2,8 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { formatDuration, Track } from '@/lib/api';
 import { Disc3, Pause, Play } from 'lucide-react';
 import { TrackPlayerActions } from '@/components/TrackPlayerActions';
+import { SongDetailsPanel } from '@/components/SongDetailsPanel';
+import { LyricsPanel } from '@/components/LyricsPanel';
 
 export default function NowPlayingPage() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -78,6 +80,12 @@ export default function NowPlayingPage() {
           {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
         </button>
       </div>
+
+      <SongDetailsPanel
+        provider={track.provider}
+        providerTrackId={track.provider_track_id}
+      />
+      <LyricsPanel track={track as Track} />
     </div>
   );
 }

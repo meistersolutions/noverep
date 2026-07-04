@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
 
+    musicbrainz_user_agent: str = "NoRepeat/1.0 ( https://noverep.onrender.com )"
+    musicbrainz_enabled: bool = True
+    lrclib_enabled: bool = True
+
     rate_limit: str = "100/minute"
 
     admin_username: str = "admin"

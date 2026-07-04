@@ -20,6 +20,7 @@ from app.infrastructure.database.models import (
     PlaylistItemModel,
     PlaylistModel,
     QueueItemModel,
+    SongModel,
     UserPreferencesModel,
 )
 
@@ -232,11 +233,26 @@ class QueueService:
 
     async def _dedupe_queue(self, session: AsyncSession, queue: list[QueueItemModel]) -> list[QueueItemModel]:
         """Remove duplicate tracks/songs from queue, keeping the earliest row (and current)."""
+        song_ids = {item.song_id for item in queue if item.song_id}
+        mb_by_song: dict[UUID, str] = {}
+        if song_ids:
+            rows = await session.execute(
+                select(SongModel.id, SongModel.musicbrainz_id).where(SongModel.id.in_(song_ids))
+            )
+            mb_by_song = {
+                row[0]: row[1] for row in rows.all() if row[1]
+            }
+
         seen_tracks: set[str] = set()
         seen_songs: set[UUID] = set()
+        seen_mb: set[str] = set()
         kept: list[QueueItemModel] = []
         for item in sorted(queue, key=lambda q: (not q.is_current, q.position)):
             if item.provider_track_id in seen_tracks or item.song_id in seen_songs:
+                await session.delete(item)
+                continue
+            mb_id = mb_by_song.get(item.song_id)
+            if mb_id and mb_id in seen_mb:
                 await session.delete(item)
                 continue
             semantic_dup = next(
@@ -259,6 +275,8 @@ class QueueService:
                 continue
             seen_tracks.add(item.provider_track_id)
             seen_songs.add(item.song_id)
+            if mb_id:
+                seen_mb.add(mb_id)
             kept.append(item)
         for i, item in enumerate(kept):
             item.position = i

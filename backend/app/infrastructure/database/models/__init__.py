@@ -93,6 +93,7 @@ class SongModel(Base):
     release_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     isrc: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
     musicbrainz_id: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
+    enrichment_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     fingerprint_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     normalization_key: Mapped[str] = mapped_column(String(512), unique=True, nullable=False, index=True)
     popularity: Mapped[float] = mapped_column(Float, default=0.0)

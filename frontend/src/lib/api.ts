@@ -18,6 +18,32 @@ export interface QueueItem extends Track {
   is_current: boolean;
 }
 
+export interface SongDetails {
+  title: string;
+  artist: string;
+  album: string | null;
+  song_name: string | null;
+  composed_by: string[];
+  performed_by: string[];
+  movie_name: string | null;
+  release_year: number | null;
+  musicbrainz_id: string | null;
+  canonical_song_id: string | null;
+}
+
+export interface LyricsLine {
+  time_ms: number;
+  text: string;
+}
+
+export interface TrackLyrics {
+  synced: boolean;
+  plain: string | null;
+  lines: LyricsLine[];
+  instrumental: boolean;
+  source: string;
+}
+
 export interface UserPreferences {
   memory_window: string;
   repeat_disabled: boolean;
@@ -134,6 +160,32 @@ export const api = {
     }
   },
   getQueue: () => request<QueueItem[]>('/queue'),
+  getTrackDetails: (provider: string, providerTrackId: string, refresh = false) => {
+    const params = new URLSearchParams({
+      provider,
+      provider_track_id: providerTrackId,
+      refresh: String(refresh),
+    });
+    return request<SongDetails>(`/tracks/details?${params}`);
+  },
+  getTrackLyrics: (args: {
+    provider: string;
+    provider_track_id: string;
+    title?: string;
+    artist?: string;
+    album?: string | null;
+    duration_seconds?: number | null;
+  }) => {
+    const params = new URLSearchParams({
+      provider: args.provider,
+      provider_track_id: args.provider_track_id,
+    });
+    if (args.title) params.set('title', args.title);
+    if (args.artist) params.set('artist', args.artist);
+    if (args.album) params.set('album', args.album);
+    if (args.duration_seconds != null) params.set('duration_seconds', String(args.duration_seconds));
+    return request<TrackLyrics | null>(`/tracks/lyrics?${params}`);
+  },
   addToQueue: (provider: string, provider_track_id: string, explicitly_requested = false, play_now = false) =>
     request<QueueItem>('/queue', {
       method: 'POST',
