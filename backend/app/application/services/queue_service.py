@@ -771,13 +771,28 @@ class QueueService:
         self, session: AsyncSession, user_id: UUID, item_id: UUID
     ) -> QueueItemModel | None:
         queue = await self.get_queue(session, user_id)
-        target = next((q for q in queue if q.id == item_id), None)
-        if not target:
+        target_idx = next((i for i, q in enumerate(queue) if q.id == item_id), -1)
+        if target_idx < 0:
             return None
-        for q in queue:
-            q.is_current = q.id == item_id
+        target = queue[target_idx]
+
+        reordered = [target] + [q for q in queue if q.id != item_id]
+        for i, q in enumerate(reordered):
+            q.position = i
+            q.is_current = i == 0
         await session.flush()
-        return target
+
+        if not await self._is_playlist_mode(session, user_id):
+            await self.sync_queue(session, user_id)
+
+        refreshed = await self.get_queue(session, user_id)
+        for q in refreshed:
+            if q.provider_track_id == target.provider_track_id:
+                for x in refreshed:
+                    x.is_current = False
+                q.is_current = True
+                return q
+        return reordered[0] if reordered else None
 
     async def load_playlist_queue(
         self,

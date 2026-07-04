@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { RefreshCw, SkipForward, Play, ListPlus, ListMusic } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatDuration, QueueItem } from '@/lib/api';
@@ -105,8 +104,7 @@ export function QueueSection({
   refreshing = false,
   showRefresh = true,
 }: QueueSectionProps) {
-  const navigate = useNavigate();
-  const { queue, refreshQueue, playTrack, playQueueItem, currentTrack, next, playbackMode } =
+  const { queue, refreshQueue, playQueueItem, currentTrack, next, playbackMode } =
     usePlayerStore();
   const [playlistTrack, setPlaylistTrack] = useState<QueueItem | null>(null);
   const playlistMode = playbackMode === 'playlist';
@@ -130,12 +128,7 @@ export function QueueSection({
 
   const handlePlayNow = async (item: QueueItem) => {
     try {
-      if (playlistMode) {
-        await playQueueItem(item);
-      } else {
-        await playTrack(item, true);
-      }
-      navigate('/now-playing');
+      await playQueueItem(item);
     } catch {
       toast.error('Could not play');
     }
@@ -173,15 +166,6 @@ export function QueueSection({
           </p>
         </div>
         <div className="flex gap-2">
-          {nowPlaying && (
-            <button
-              className="btn-primary flex items-center gap-1.5 text-sm py-2 px-3"
-              onClick={handleSkip}
-            >
-              <SkipForward className="w-4 h-4" />
-              Skip
-            </button>
-          )}
           {!playlistMode && showRefresh && onRefreshPreferences && (
             <button
               className="btn-ghost flex items-center gap-1.5 text-sm"

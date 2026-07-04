@@ -113,6 +113,14 @@ function applyQueueSnapshot(
   };
 }
 
+function reorderQueueToPlayNow(queue: QueueItem[], item: QueueItem): QueueItem[] {
+  const rest = queue.filter((q) => q.id !== item.id);
+  return [
+    { ...item, is_current: true, position: 0 },
+    ...rest.map((q, i) => ({ ...q, is_current: false, position: i + 1 })),
+  ];
+}
+
 function applyServerQueueAfterSkip(serverQueue: QueueItem[], serverItem: QueueItem) {
   const deduped = dedupeQueue(serverQueue);
   const aligned = alignQueueWithCurrentTrack(deduped, serverItem);
@@ -425,7 +433,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const { queue, volume, sessionId, currentTrack, duration } = get();
 
       if (manualSkip) {
-        void get().recordCurrentPlayback(true);
+        await get().recordCurrentPlayback(true);
       } else if (currentTrack) {
         void recordPlayProgress(currentTrack, sessionId, duration, duration, false).then(() =>
           get().bumpHistory(),
@@ -543,25 +551,37 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   playQueueItem: async (item) => {
-    const updated = await api.playQueueItem(item.id);
-    set({
-      currentTrack: updated,
-      isPlaying: true,
-      currentTime: 0,
-      duration: updated.duration_seconds ?? 0,
-    });
-
-    const { loadAndPlay } = await import('@/lib/youtubePlayerController');
-    await loadAndPlay(updated.provider_track_id, get().volume * 100);
-
+    if (advancingNext) return;
+    advancingNext = true;
     try {
-      await recordPlayStart(updated, get().sessionId);
-      get().bumpHistory();
-    } catch {
-      /* best-effort */
-    }
+      setWantPlaying(true);
+      prepareTrackTransition();
+      const optimistic = reorderQueueToPlayNow(get().queue, item);
+      set({
+        currentTrack: item,
+        queue: optimistic,
+        isPlaying: true,
+        currentTime: 0,
+        duration: item.duration_seconds ?? 0,
+      });
+      void beginPlayback(item, get().volume);
 
-    await get().refreshQueue();
+      const updated = await api.playQueueItem(item.id);
+      const serverQueue = await api.getQueue();
+      set({
+        ...applyServerQueueAfterSkip(serverQueue, updated),
+      });
+      void prefetchUpcoming(get().queue);
+
+      try {
+        await recordPlayStart(updated, get().sessionId);
+        get().bumpHistory();
+      } catch {
+        /* best-effort */
+      }
+    } finally {
+      advancingNext = false;
+    }
   },
 
   refreshQueue: async () => {
