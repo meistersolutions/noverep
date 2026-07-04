@@ -48,28 +48,48 @@ export function LyricsPanel({ track }: LyricsPanelProps) {
     if (cached !== undefined) {
       if (cached === 'missing') {
         setMissing(true);
-        setLoading(false);
+        setLines([]);
       } else {
         setLines(cached.lines);
         setSynced(cached.synced);
         setInstrumental(cached.instrumental);
         setMissing(false);
-        setLoading(false);
       }
-      return;
+      setLoading(false);
+    } else {
+      setLoading(true);
+      setMissing(false);
+      setLines([]);
     }
 
     let cancelled = false;
 
     const loadLyrics = async () => {
-      setLoading(true);
-      setMissing(false);
-      setLines([]);
-
       const details = getCachedTrackDetails(cacheKey);
-      const title = details?.song_name || track.title;
-      const artist = details?.performed_by?.[0] || details?.artist || track.artist;
-      const album = details?.movie_name || track.album;
+      let title = details?.song_name || track.title;
+      let artist = details?.performed_by?.[0] || details?.artist || track.artist;
+      let album = details?.movie_name || track.album;
+
+      if (!details) {
+        try {
+          const enriched = await api.getTrackDetails(
+            track.provider,
+            track.provider_track_id,
+            false,
+            track.title,
+            track.artist,
+          );
+          if (cancelled) return;
+          setCachedTrackDetails(cacheKey, enriched);
+          title = enriched.song_name || track.title;
+          artist = enriched.performed_by?.[0] || enriched.artist || track.artist;
+          album = enriched.movie_name || track.album;
+        } catch {
+          // Fall back to raw track metadata.
+        }
+      }
+
+      if (cancelled) return;
 
       try {
         const data = await api.getTrackLyrics({
@@ -84,48 +104,23 @@ export function LyricsPanel({ track }: LyricsPanelProps) {
         if (!data || (!data.lines.length && !data.instrumental)) {
           setCachedTrackLyrics(cacheKey, 'missing');
           setMissing(true);
+          setLines([]);
           return;
         }
         setCachedTrackLyrics(cacheKey, data);
         setLines(data.lines);
         setSynced(data.synced);
         setInstrumental(data.instrumental);
+        setMissing(false);
       } catch {
         if (!cancelled) {
           setCachedTrackLyrics(cacheKey, 'missing');
           setMissing(true);
+          setLines([]);
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
-
-      if (cancelled || details) return;
-      void api
-        .getTrackDetails(track.provider, track.provider_track_id, false, track.title, track.artist)
-        .then((enriched) => {
-          if (cancelled) return;
-          setCachedTrackDetails(cacheKey, enriched);
-          const retryTitle = enriched.song_name || track.title;
-          const retryArtist = enriched.performed_by?.[0] || enriched.artist || track.artist;
-          if (retryTitle === title && retryArtist === artist) return;
-          return api.getTrackLyrics({
-            provider: track.provider,
-            provider_track_id: track.provider_track_id,
-            title: retryTitle,
-            artist: retryArtist,
-            album: enriched.movie_name || track.album,
-            duration_seconds: track.duration_seconds,
-          });
-        })
-        .then((data) => {
-          if (cancelled || !data || (!data.lines.length && !data.instrumental)) return;
-          setCachedTrackLyrics(cacheKey, data);
-          setLines(data.lines);
-          setSynced(data.synced);
-          setInstrumental(data.instrumental);
-          setMissing(false);
-        })
-        .catch(() => {});
     };
 
     void loadLyrics();

@@ -405,11 +405,16 @@ async def track_lyrics(
     session: AsyncSession = Depends(get_db_session),
     providers=Depends(get_providers),
     normalizer: SongNormalizer = Depends(get_normalizer),
+    enrichment: SongEnrichmentService = Depends(get_enrichment_service),
     lyrics_svc=Depends(get_lyrics_service),
 ):
     if not settings.lrclib_enabled:
         raise HTTPException(status_code=404, detail="Lyrics disabled")
 
+    from app.application.services.song_matcher import extract_movie_hint
+    from app.domain.entities import ProviderTrack
+
+    track: ProviderTrack | None = None
     if not title or not artist:
         provider_impl = providers.get(provider)
         if provider_impl:
@@ -425,11 +430,8 @@ async def track_lyrics(
     if not title or not artist:
         raise HTTPException(status_code=400, detail="title and artist are required")
 
-    from app.domain.entities import ProviderTrack
-
-    song = await normalizer._find_by_provider_track(
-        session,
-        ProviderTrack(
+    if not track:
+        track = ProviderTrack(
             provider=provider,
             provider_track_id=provider_track_id,
             title=title,
@@ -437,17 +439,27 @@ async def track_lyrics(
             album=album,
             duration_seconds=duration_seconds,
             thumbnail_url=None,
-        ),
-    )
-    if song and song.enrichment_metadata:
-        meta = song.enrichment_metadata
-        title = meta.get("song_name") or title
-        performed = meta.get("performed_by") or []
-        if performed:
-            artist = performed[0]
-        album = meta.get("movie_name") or album
+        )
 
-    result = await lyrics_svc.fetch_lyrics(title, artist, album, duration_seconds)
+    song = await normalizer._find_by_provider_track(session, track)
+    lyrics_title = title
+    lyrics_artist = artist
+    lyrics_album = album or extract_movie_hint(title, artist, album)
+
+    if song and settings.musicbrainz_enabled:
+        enriched = await enrichment.get_for_song(session, song.id, track)
+        if enriched and enrichment_matches_track(enriched, track):
+            lyrics_title = enriched.song_name or lyrics_title
+            if enriched.performed_by:
+                lyrics_artist = enriched.performed_by[0]
+            lyrics_album = enriched.movie_name or lyrics_album
+
+    result = await lyrics_svc.fetch_lyrics(
+        lyrics_title,
+        lyrics_artist,
+        lyrics_album,
+        duration_seconds,
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Lyrics not found")
 

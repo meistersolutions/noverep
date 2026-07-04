@@ -9,9 +9,19 @@ from typing import Any
 import httpx
 import structlog
 
+from app.application.services.song_matcher import (
+    artist_similarity,
+    extract_core_title,
+    extract_movie_hint,
+    match_score,
+    normalize_text,
+    title_similarity,
+)
+
 logger = structlog.get_logger()
 
 TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\]")
+LYRICS_MATCH_THRESHOLD = 0.82
 
 
 @dataclass
@@ -69,6 +79,90 @@ def parse_lrc(lrc_content: str) -> list[LyricsLine]:
     return sorted(lines, key=lambda line: line.time_ms)
 
 
+def _item_field(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _item_duration(item: dict[str, Any]) -> int | None:
+    raw = item.get("duration")
+    if raw is None:
+        return None
+    try:
+        duration = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return duration if duration > 0 else None
+
+
+def _album_match_score(album_hint: str | None, album_name: str) -> float:
+    if not album_hint or not album_name:
+        return 0.0
+    hint = normalize_text(album_hint)
+    norm_album = normalize_text(album_name)
+    if hint == norm_album:
+        return 1.0
+    if hint in norm_album or norm_album in hint:
+        return 0.85
+    return 0.0
+
+
+def lyrics_item_score(
+    item: dict[str, Any],
+    title: str,
+    artist: str,
+    duration_seconds: int | None,
+    album_hint: str | None = None,
+) -> float:
+    cand_title = _item_field(item, "trackName", "name")
+    cand_artist = _item_field(item, "artistName", "artist")
+    cand_album = _item_field(item, "albumName", "album")
+    cand_duration = _item_duration(item)
+
+    if not cand_title:
+        return 0.0
+
+    score = match_score(
+        title,
+        artist,
+        duration_seconds,
+        cand_title,
+        cand_artist,
+        cand_duration,
+    )
+    score += _album_match_score(album_hint, cand_album) * 0.15
+
+    if normalize_text(title) != normalize_text(cand_title):
+        if artist_similarity(artist, cand_artist) < 0.45:
+            return 0.0
+        if title_similarity(title, cand_title, artist, cand_artist) < 0.8:
+            return 0.0
+
+    return score
+
+
+def pick_best_lyrics_item(
+    items: list[dict[str, Any]],
+    title: str,
+    artist: str,
+    duration_seconds: int | None,
+    album_hint: str | None = None,
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    best_score = 0.0
+
+    for item in items:
+        score = lyrics_item_score(item, title, artist, duration_seconds, album_hint)
+        if score > best_score:
+            best_score = score
+            best = item
+
+    return best if best_score >= LYRICS_MATCH_THRESHOLD else None
+
+
 class LyricsService:
     BASE_URL = "https://lrclib.net/api"
 
@@ -84,53 +178,65 @@ class LyricsService:
         *,
         cached_only: bool = False,
     ) -> TrackLyrics | None:
-        from app.application.services.song_matcher import extract_core_title
+        core_title = extract_core_title(title, artist)
+        album_hint = album or extract_movie_hint(title, artist, album)
+        artist_name = artist.strip() or "Unknown"
 
-        search_title = extract_core_title(title, artist)
-        attempts: list[dict[str, str | int]] = [
-            {
-                "track_name": search_title,
-                "artist_name": artist.strip() or "Unknown",
-            }
-        ]
-        if album:
-            attempts[0]["album_name"] = album.strip()
+        attempts: list[dict[str, str | int]] = []
+        base = {"track_name": core_title, "artist_name": artist_name}
+        if album_hint:
+            attempts.append({**base, "album_name": album_hint})
         if duration_seconds and duration_seconds > 0:
-            attempts[0]["duration"] = duration_seconds
-
-        attempts.append(
-            {
-                "track_name": search_title,
-                "artist_name": artist.strip() or "Unknown",
-            }
-        )
-        if title.strip() and title.strip() != search_title:
-            attempts.append(
-                {
-                    "track_name": title.strip(),
-                    "artist_name": artist.strip() or "Unknown",
-                }
-            )
+            with_duration = {**base, "duration": duration_seconds}
+            if album_hint:
+                with_duration["album_name"] = album_hint
+            attempts.append(with_duration)
+        attempts.append(base)
 
         endpoint = "/get-cached" if cached_only else "/get"
         for params in attempts:
-            result = await self._request_lyrics(endpoint, params)
+            result = await self._request_lyrics(
+                endpoint,
+                params,
+                core_title,
+                artist,
+                duration_seconds,
+                album_hint,
+            )
             if result:
                 return result
             if not cached_only:
-                result = await self._request_lyrics("/get-cached", params)
+                result = await self._request_lyrics(
+                    "/get-cached",
+                    params,
+                    core_title,
+                    artist,
+                    duration_seconds,
+                    album_hint,
+                )
                 if result:
                     return result
 
         if not cached_only:
-            search_result = await self._search_lyrics(search_title, artist, album)
+            search_result = await self._search_lyrics(
+                core_title,
+                artist,
+                album_hint,
+                duration_seconds,
+            )
             if search_result:
                 return search_result
 
         return None
 
     async def _request_lyrics(
-        self, endpoint: str, params: dict[str, str | int]
+        self,
+        endpoint: str,
+        params: dict[str, str | int],
+        title: str,
+        artist: str,
+        duration_seconds: int | None,
+        album_hint: str | None,
     ) -> TrackLyrics | None:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -141,17 +247,29 @@ class LyricsService:
                 data = response.json()
         except Exception:
             return None
+
+        if not isinstance(data, dict):
+            return None
+
+        score = lyrics_item_score(data, title, artist, duration_seconds, album_hint)
+        if score < LYRICS_MATCH_THRESHOLD:
+            return None
+
         return self._parse_payload(data)
 
     async def _search_lyrics(
-        self, title: str, artist: str, album: str | None
+        self,
+        title: str,
+        artist: str,
+        album_hint: str | None,
+        duration_seconds: int | None,
     ) -> TrackLyrics | None:
         params: dict[str, str] = {
             "track_name": title,
             "artist_name": artist,
         }
-        if album:
-            params["album_name"] = album
+        if album_hint:
+            params["album_name"] = album_hint
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(f"{self.BASE_URL}/search", params=params)
@@ -164,7 +282,11 @@ class LyricsService:
 
         if not isinstance(items, list) or not items:
             return None
-        return self._parse_payload(items[0])
+
+        picked = pick_best_lyrics_item(items, title, artist, duration_seconds, album_hint)
+        if not picked:
+            return None
+        return self._parse_payload(picked)
 
     def _parse_payload(self, data: dict) -> TrackLyrics | None:
         synced_raw = (data.get("syncedLyrics") or "").strip()
