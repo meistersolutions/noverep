@@ -30,11 +30,11 @@ export function SongDetailsPanel({
     if (cached) {
       setDetails(cached);
       setLoading(false);
-      return;
+    } else {
+      setLoading(true);
     }
 
     let cancelled = false;
-    setLoading(true);
 
     api
       .getTrackDetails(provider, providerTrackId, false, title, artist)
@@ -44,7 +44,7 @@ export function SongDetailsPanel({
         setDetails(data);
       })
       .catch(() => {
-        if (!cancelled) setDetails(null);
+        if (!cancelled && !cached) setDetails(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -68,6 +68,7 @@ export function SongDetailsPanel({
   const rows = [
     { label: 'Song', value: details.song_name },
     { label: 'Composed by', value: details.composed_by?.join(', ') },
+    { label: 'Lyricist', value: details.lyricist_by?.join(', ') },
     { label: 'Performed by', value: details.performed_by?.join(', ') || details.artist },
     { label: 'Movie', value: details.movie_name },
     { label: 'Year', value: details.release_year ? String(details.release_year) : null },

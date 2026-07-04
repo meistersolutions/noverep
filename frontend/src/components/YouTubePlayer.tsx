@@ -29,6 +29,7 @@ export function YouTubePlayer() {
     setDuration,
     next,
     previous,
+    syncFromPlayer,
   } = usePlayerStore();
 
   const currentTrackRef = useRef(currentTrack);
@@ -130,9 +131,10 @@ export function YouTubePlayer() {
       if (Number.isFinite(t)) setCurrentTime(t);
       const d = p.getDuration();
       if (d && Number.isFinite(d) && d > 0) setDuration(d);
+      syncFromPlayer();
     }, 500);
     return () => clearInterval(id);
-  }, [setCurrentTime, setDuration]);
+  }, [setCurrentTime, setDuration, syncFromPlayer]);
 
   const isNative = Capacitor.isNativePlatform();
 

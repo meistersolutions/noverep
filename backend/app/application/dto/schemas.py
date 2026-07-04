@@ -65,6 +65,7 @@ class SongDetailsResponse(BaseModel):
     album: str | None = None
     song_name: str | None = None
     composed_by: list[str] = Field(default_factory=list)
+    lyricist_by: list[str] = Field(default_factory=list)
     performed_by: list[str] = Field(default_factory=list)
     movie_name: str | None = None
     release_year: int | None = None

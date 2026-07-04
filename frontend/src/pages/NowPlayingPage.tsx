@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatDuration, Track } from '@/lib/api';
 import { Disc3, Pause, Play } from 'lucide-react';
@@ -12,6 +13,11 @@ export default function NowPlayingPage() {
   const duration = usePlayerStore((s) => s.duration);
   const setPlaying = usePlayerStore((s) => s.setPlaying);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
+  const syncFromPlayer = usePlayerStore((s) => s.syncFromPlayer);
+
+  useEffect(() => {
+    syncFromPlayer();
+  }, [syncFromPlayer, currentTrack?.provider_track_id]);
 
   const track = currentTrack;
 

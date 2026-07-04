@@ -12,12 +12,8 @@ import structlog
 
 logger = structlog.get_logger()
 
-COMPOSER_REL_TYPES = frozenset(
-    {"composer", "writer", "arranger", "lyricist", "author", "librettist"}
-)
-PERFORMER_REL_TYPES = frozenset(
-    {"performer", "vocal", "lead vocals", "background vocals", "singer", "artist"}
-)
+COMPOSER_REL_TYPES = frozenset({"composer", "writer", "arranger"})
+LYRICIST_REL_TYPES = frozenset({"lyricist", "author", "poet", "librettist"})
 
 
 class MusicBrainzClient:
@@ -57,6 +53,7 @@ class MusicBrainzClient:
         artist: str | None = None,
         duration_seconds: int | None = None,
         *,
+        release: str | None = None,
         limit: int = 8,
     ) -> list[dict[str, Any]]:
         title = (title or "").strip()
@@ -66,6 +63,8 @@ class MusicBrainzClient:
         clauses = [f'recording:"{title}"']
         if artist and artist.strip():
             clauses.append(f'artist:"{artist.strip()}"')
+        if release and release.strip():
+            clauses.append(f'release:"{release.strip()}"')
         if duration_seconds and duration_seconds > 0:
             ms = duration_seconds * 1000
             clauses.append(f"dur:[{max(0, ms - 8000)} TO {ms + 8000}]")

@@ -40,7 +40,11 @@ from app.application.tasks.queue_tasks import run_queue_sync_background
 from app.application.services.playlist_service import PlaylistService
 from app.application.services.queue_service import QueueRefreshFilters, QueueService
 from app.application.services.recommendation_engine import RecommendationEngine
-from app.application.services.song_enrichment_service import SongEnrichmentService
+from app.application.services.song_enrichment_service import (
+    SongEnrichment,
+    SongEnrichmentService,
+    enrichment_matches_track,
+)
 from app.application.services.song_normalizer import SongNormalizer
 from app.application.services.statistics_service import StatisticsService
 from app.application.tasks.enrichment_tasks import run_song_enrichment_background
@@ -321,18 +325,30 @@ async def track_details(
             )
             artist_model = artist_row.scalar_one_or_none()
             artist_name = artist_model.name if artist_model else ""
-        return SongDetailsResponse(
+        cached = SongEnrichment.from_dict(metadata)
+        probe_track = ProviderTrack(
+            provider=provider,
+            provider_track_id=provider_track_id,
             title=title or song.title,
             artist=artist_name,
             album=None,
-            song_name=metadata.get("song_name") or song.title,
-            composed_by=list(metadata.get("composed_by") or []),
-            performed_by=list(metadata.get("performed_by") or []),
-            movie_name=metadata.get("movie_name"),
-            release_year=metadata.get("release_year") or song.release_year,
-            musicbrainz_id=metadata.get("musicbrainz_id") or song.musicbrainz_id,
-            canonical_song_id=song.id,
+            duration_seconds=song.duration_seconds,
+            thumbnail_url=None,
         )
+        if cached and enrichment_matches_track(cached, probe_track):
+            return SongDetailsResponse(
+                title=title or song.title,
+                artist=artist_name,
+                album=None,
+                song_name=metadata.get("song_name") or song.title,
+                composed_by=list(metadata.get("composed_by") or []),
+                lyricist_by=list(metadata.get("lyricist_by") or []),
+                performed_by=list(metadata.get("performed_by") or []),
+                movie_name=metadata.get("movie_name"),
+                release_year=metadata.get("release_year") or song.release_year,
+                musicbrainz_id=metadata.get("musicbrainz_id") or song.musicbrainz_id,
+                canonical_song_id=song.id,
+            )
 
     try:
         track = await provider_impl.get_metadata(provider_track_id)
@@ -368,6 +384,7 @@ async def track_details(
         album=track.album,
         song_name=metadata.get("song_name") or song.title,
         composed_by=list(metadata.get("composed_by") or []),
+        lyricist_by=list(metadata.get("lyricist_by") or []),
         performed_by=list(metadata.get("performed_by") or []),
         movie_name=metadata.get("movie_name"),
         release_year=metadata.get("release_year") or song.release_year,

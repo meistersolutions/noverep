@@ -66,22 +66,7 @@ export function LyricsPanel({ track }: LyricsPanelProps) {
       setMissing(false);
       setLines([]);
 
-      let details = getCachedTrackDetails(cacheKey);
-      if (!details) {
-        try {
-          details = await api.getTrackDetails(
-            track.provider,
-            track.provider_track_id,
-            false,
-            track.title,
-            track.artist,
-          );
-          setCachedTrackDetails(cacheKey, details);
-        } catch {
-          details = undefined;
-        }
-      }
-
+      const details = getCachedTrackDetails(cacheKey);
       const title = details?.song_name || track.title;
       const artist = details?.performed_by?.[0] || details?.artist || track.artist;
       const album = details?.movie_name || track.album;
@@ -113,6 +98,34 @@ export function LyricsPanel({ track }: LyricsPanelProps) {
       } finally {
         if (!cancelled) setLoading(false);
       }
+
+      if (cancelled || details) return;
+      void api
+        .getTrackDetails(track.provider, track.provider_track_id, false, track.title, track.artist)
+        .then((enriched) => {
+          if (cancelled) return;
+          setCachedTrackDetails(cacheKey, enriched);
+          const retryTitle = enriched.song_name || track.title;
+          const retryArtist = enriched.performed_by?.[0] || enriched.artist || track.artist;
+          if (retryTitle === title && retryArtist === artist) return;
+          return api.getTrackLyrics({
+            provider: track.provider,
+            provider_track_id: track.provider_track_id,
+            title: retryTitle,
+            artist: retryArtist,
+            album: enriched.movie_name || track.album,
+            duration_seconds: track.duration_seconds,
+          });
+        })
+        .then((data) => {
+          if (cancelled || !data || (!data.lines.length && !data.instrumental)) return;
+          setCachedTrackLyrics(cacheKey, data);
+          setLines(data.lines);
+          setSynced(data.synced);
+          setInstrumental(data.instrumental);
+          setMissing(false);
+        })
+        .catch(() => {});
     };
 
     void loadLyrics();

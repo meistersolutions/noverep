@@ -24,6 +24,7 @@ export interface SongDetails {
   album: string | null;
   song_name: string | null;
   composed_by: string[];
+  lyricist_by: string[];
   performed_by: string[];
   movie_name: string | null;
   release_year: number | null;

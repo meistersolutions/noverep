@@ -80,36 +80,42 @@ function alignQueueWithCurrentTrack(
   return queue.map((q) => ({ ...q, is_current: q.provider_track_id === id }));
 }
 
-/** Merge server queue row into client track without replacing a newer in-flight track. */
-function mergeCurrentTrackFromQueue(
+/** Resolve what the UI should show as now playing. Player wins when audio is active. */
+function resolveCurrentTrack(
   queue: QueueItem[],
   currentTrack: QueueItem | Track | null,
   isPlaying: boolean,
 ): QueueItem | Track | null {
-  const fromQueue = queue.find((q) => q.is_current);
-  if (!currentTrack) {
-    return fromQueue ?? queue[0] ?? null;
+  const activeId = isPlaying ? getActiveVideoId() : null;
+
+  if (activeId) {
+    const inQueue = queue.find((q) => q.provider_track_id === activeId);
+    if (inQueue) {
+      return {
+        ...inQueue,
+        thumbnail_url: inQueue.thumbnail_url || currentTrack?.thumbnail_url || null,
+      };
+    }
+    if (currentTrack?.provider_track_id === activeId) {
+      return currentTrack;
+    }
   }
-  if (!isPlaying && fromQueue) {
-    return fromQueue;
+
+  if (currentTrack) {
+    const inQueue = queue.find((q) => q.provider_track_id === currentTrack.provider_track_id);
+    if (inQueue) {
+      return {
+        ...inQueue,
+        thumbnail_url: inQueue.thumbnail_url || currentTrack.thumbnail_url,
+      };
+    }
+    if (isPlaying) {
+      return currentTrack;
+    }
   }
-  const clientId = currentTrack.provider_track_id;
-  const inQueue = queue.some((q) => q.provider_track_id === clientId);
-  const serverId = fromQueue?.provider_track_id;
-  if (!inQueue && fromQueue) {
-    return fromQueue;
-  }
-  if (serverId && serverId !== clientId && inQueue) {
-    return currentTrack;
-  }
-  const match = queue.find((q) => q.provider_track_id === clientId);
-  if (match) {
-    return {
-      ...match,
-      thumbnail_url: match.thumbnail_url || currentTrack.thumbnail_url,
-    };
-  }
-  return fromQueue ?? currentTrack;
+
+  const serverCurrent = queue.find((q) => q.is_current);
+  return serverCurrent ?? currentTrack ?? queue[0] ?? null;
 }
 
 function applyQueueSnapshot(
@@ -118,15 +124,7 @@ function applyQueueSnapshot(
   isPlaying: boolean,
 ): { queue: QueueItem[]; currentTrack: QueueItem | Track | null } {
   const deduped = dedupeQueue(queue);
-  let track = currentTrack;
-  if (isPlaying && !advancingNext) {
-    const activeId = getActiveVideoId();
-    if (activeId) {
-      const fromPlayer = deduped.find((q) => q.provider_track_id === activeId);
-      if (fromPlayer) track = fromPlayer;
-    }
-  }
-  const merged = mergeCurrentTrackFromQueue(deduped, track, isPlaying);
+  const merged = resolveCurrentTrack(deduped, currentTrack, isPlaying);
   const aligned = alignQueueWithCurrentTrack(deduped, merged);
   return {
     queue: aligned,
@@ -211,6 +209,7 @@ interface PlayerState {
   bumpHistory: () => void;
   recordCurrentPlayback: (skipped?: boolean) => Promise<void>;
   syncToActiveVideo: (videoId: string) => void;
+  syncFromPlayer: () => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -280,11 +279,27 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const buildQueue = async () => {
       set({ queueBuilding: true });
       try {
+        const playing = get().isPlaying && get().currentTrack;
         if (get().playbackMode === 'playlist') {
-          await get().refreshQueue();
+          if (!playing) await get().refreshQueue();
         } else {
-          await get().fillQueue();
-          await get().refreshQueue();
+          void api.syncQueue().then((queue) => {
+            if (!queue?.length) return;
+            const { currentTrack, isPlaying } = get();
+            const snapshot = applyQueueSnapshot(queue, currentTrack, isPlaying);
+            set({ queue: snapshot.queue, currentTrack: snapshot.currentTrack });
+            void prefetchUpcoming(snapshot.queue);
+          }).catch(() => {});
+          if (!playing) {
+            try {
+              const queue = await api.getQueue();
+              const snapshot = applyQueueSnapshot(queue, get().currentTrack, false);
+              set(snapshot);
+              void prefetchUpcoming(snapshot.queue);
+            } catch {
+              /* best-effort */
+            }
+          }
         }
       } finally {
         set({ queueBuilding: false });
@@ -364,12 +379,23 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   syncToActiveVideo: (videoId: string) => {
-    if (advancingNext) return;
+    if (!videoId) return;
     const { queue, currentTrack, isPlaying } = get();
-    if (!isPlaying || !videoId || currentTrack?.provider_track_id === videoId) return;
+    if (!isPlaying) return;
+    if (currentTrack?.provider_track_id === videoId) return;
     const match = queue.find((q) => q.provider_track_id === videoId);
-    if (!match) return;
-    set(applyQueueSnapshot(queue, match, true));
+    if (match) {
+      set({
+        currentTrack: match,
+        queue: alignQueueWithCurrentTrack(queue, match),
+      });
+    }
+  },
+
+  syncFromPlayer: () => {
+    const videoId = getActiveVideoId();
+    if (!videoId) return;
+    get().syncToActiveVideo(videoId);
   },
 
   setPlaying: (playing) => {
@@ -606,14 +632,31 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   refreshQueue: async () => {
-    const queue = await api.getQueue();
     const { currentTrack, isPlaying, volume } = get();
+    const activeId = isPlaying ? getActiveVideoId() : null;
+    const queue = await api.getQueue();
     const snapshot = applyQueueSnapshot(queue, currentTrack, isPlaying);
-    set(snapshot);
-    void prefetchUpcoming(snapshot.queue);
 
-    if (snapshot.currentTrack && !isPlaying) {
-      void cueVideoForResume(snapshot.currentTrack.provider_track_id, volume * 100);
+    if (activeId && snapshot.currentTrack?.provider_track_id !== activeId) {
+      const fromPlayer = snapshot.queue.find((q) => q.provider_track_id === activeId);
+      if (fromPlayer) {
+        set({
+          queue: alignQueueWithCurrentTrack(snapshot.queue, fromPlayer),
+          currentTrack: fromPlayer,
+        });
+      } else if (currentTrack?.provider_track_id === activeId) {
+        set({ queue: snapshot.queue, currentTrack });
+      } else {
+        set(snapshot);
+      }
+    } else {
+      set(snapshot);
+    }
+
+    void prefetchUpcoming(get().queue);
+
+    if (get().currentTrack && !isPlaying) {
+      void cueVideoForResume(get().currentTrack!.provider_track_id, volume * 100);
     }
   },
 

@@ -53,6 +53,32 @@ def strip_title_noise(title: str) -> str:
     return TITLE_NOISE.sub(" ", cleaned)
 
 
+def extract_movie_hint(title: str, artist: str = "", album: str | None = None) -> str | None:
+    """Extract film/album name from common Indian YouTube title patterns."""
+    if album and album.strip():
+        return album.strip()
+
+    cleaned = strip_title_noise(title)
+    parts = [p.strip() for p in re.split(r"[|\-–—:•]+", cleaned) if p.strip()]
+    if len(parts) < 2:
+        return None
+
+    norm_artist = normalize_text(artist)
+    norm_song = normalize_text(parts[0])
+
+    for part in parts[1:]:
+        norm_part = normalize_text(part)
+        if len(norm_part) < 3:
+            continue
+        if norm_part == norm_artist or norm_artist in norm_part or norm_part in norm_artist:
+            continue
+        if norm_part == norm_song:
+            continue
+        return part.strip()
+
+    return None
+
+
 def extract_core_title(title: str, artist: str | None = None) -> str:
     """Best-effort song name from messy YouTube titles."""
     cleaned = strip_title_noise(title)
@@ -122,6 +148,15 @@ def title_similarity(
     if norm_a == norm_b:
         return 1.0
     if norm_a in norm_b or norm_b in norm_a:
+        shorter, longer = (
+            (norm_a, norm_b) if len(norm_a) <= len(norm_b) else (norm_b, norm_a)
+        )
+        if shorter != longer:
+            extra_tokens = token_set(longer) - token_set(shorter)
+            if extra_tokens:
+                ratio = len(shorter) / len(longer) if longer else 0
+                sequence = SequenceMatcher(None, norm_a, norm_b).ratio()
+                return min(sequence, ratio + 0.1)
         return 0.92
     sequence = SequenceMatcher(None, norm_a, norm_b).ratio()
     tokens = jaccard_similarity(token_set(core_a), token_set(core_b))

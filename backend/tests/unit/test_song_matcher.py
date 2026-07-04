@@ -1,5 +1,6 @@
 from app.application.services.song_matcher import (
     extract_core_title,
+    extract_movie_hint,
     is_same_song,
     title_similarity,
 )
@@ -46,3 +47,24 @@ class TestSongMatcher:
     def test_title_similarity_partial_overlap_not_enough(self):
         score = title_similarity("Summer Nights", "Grease", "Winter Nights", "Grease")
         assert score < 0.82
+
+    def test_kalaimane_not_matched_to_kanne_kalaimane(self):
+        score = title_similarity(
+            "Kalaimane",
+            "Hariharan",
+            "Kanne Kalaimane",
+            "K. J. Yesudas",
+        )
+        assert score < 0.82
+        assert not is_same_song(
+            "Kalaimane",
+            "Hariharan",
+            300,
+            "Kanne Kalaimane",
+            "K. J. Yesudas",
+            305,
+        )
+
+    def test_extract_movie_hint_from_youtube_title(self):
+        hint = extract_movie_hint("Kalaimane - Thalam - Hariharan", "Hariharan")
+        assert hint == "Thalam"

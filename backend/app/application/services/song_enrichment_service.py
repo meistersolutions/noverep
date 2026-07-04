@@ -11,15 +11,24 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.services.song_matcher import extract_core_title, match_score, normalize_text
+from app.application.services.song_matcher import (
+    extract_core_title,
+    extract_movie_hint,
+    match_score,
+    normalize_text,
+    title_similarity,
+)
 from app.domain.entities import ProviderTrack
 from app.infrastructure.database.models import ArtistModel, SongModel
 from app.infrastructure.external.musicbrainz_client import (
     COMPOSER_REL_TYPES,
+    LYRICIST_REL_TYPES,
     MusicBrainzClient,
 )
 
 logger = structlog.get_logger()
+
+ENRICHMENT_MATCH_THRESHOLD = 0.82
 
 
 @dataclass
@@ -27,6 +36,7 @@ class SongEnrichment:
     musicbrainz_id: str | None = None
     song_name: str | None = None
     composed_by: list[str] = field(default_factory=list)
+    lyricist_by: list[str] = field(default_factory=list)
     performed_by: list[str] = field(default_factory=list)
     movie_name: str | None = None
     release_year: int | None = None
@@ -37,6 +47,7 @@ class SongEnrichment:
             "musicbrainz_id": self.musicbrainz_id,
             "song_name": self.song_name,
             "composed_by": self.composed_by,
+            "lyricist_by": self.lyricist_by,
             "performed_by": self.performed_by,
             "movie_name": self.movie_name,
             "release_year": self.release_year,
@@ -52,6 +63,7 @@ class SongEnrichment:
             musicbrainz_id=data.get("musicbrainz_id"),
             song_name=data.get("song_name"),
             composed_by=list(data.get("composed_by") or []),
+            lyricist_by=list(data.get("lyricist_by") or []),
             performed_by=list(data.get("performed_by") or []),
             movie_name=data.get("movie_name"),
             release_year=data.get("release_year"),
@@ -114,11 +126,49 @@ def _relation_artist_names(relations: list[dict[str, Any]], allowed_types: froze
     return names
 
 
+def _movie_match_score(movie_hint: str | None, recording: dict[str, Any]) -> float:
+    if not movie_hint:
+        return 0.0
+    hint = normalize_text(movie_hint)
+    movie = _release_group_movie_name(recording)
+    if not movie:
+        return 0.0
+    norm_movie = normalize_text(movie)
+    if hint == norm_movie:
+        return 1.0
+    if hint in norm_movie or norm_movie in hint:
+        return 0.85
+    return 0.0
+
+
+def enrichment_matches_track(
+    enrichment: SongEnrichment,
+    track: ProviderTrack,
+) -> bool:
+    if not enrichment.song_name:
+        return False
+    performer = enrichment.performed_by[0] if enrichment.performed_by else ""
+    score = match_score(
+        track.title,
+        track.artist,
+        track.duration_seconds,
+        enrichment.song_name,
+        performer,
+        None,
+    )
+    return score >= ENRICHMENT_MATCH_THRESHOLD
+
+
+def _enrichment_matches_track(enrichment: SongEnrichment, track: ProviderTrack) -> bool:
+    return enrichment_matches_track(enrichment, track)
+
+
 def _pick_best_recording(
     candidates: list[dict[str, Any]],
     title: str,
     artist: str,
     duration_seconds: int | None,
+    movie_hint: str | None = None,
 ) -> dict[str, Any] | None:
     if not candidates:
         return None
@@ -143,11 +193,22 @@ def _pick_best_recording(
             cand_artist,
             cand_duration,
         )
+        score += _movie_match_score(movie_hint, candidate) * 0.15
+
+        title_score = title_similarity(core_title, cand_title, artist, cand_artist)
+        if normalize_text(core_title) != normalize_text(cand_title):
+            from app.application.services.song_matcher import artist_similarity
+
+            if artist_similarity(artist, cand_artist) < 0.45:
+                continue
+            if title_score < 0.8:
+                continue
+
         if score > best_score:
             best_score = score
             best = candidate
 
-    return best if best_score >= 0.72 else None
+    return best if best_score >= ENRICHMENT_MATCH_THRESHOLD else None
 
 
 class SongEnrichmentService:
@@ -156,17 +217,39 @@ class SongEnrichmentService:
 
     async def enrich_track(self, track: ProviderTrack) -> SongEnrichment | None:
         core_title = extract_core_title(track.title, track.artist)
+        movie_hint = extract_movie_hint(track.title, track.artist, track.album)
+
         candidates = await self.client.search_recording(
             core_title,
             track.artist,
             track.duration_seconds,
+            release=movie_hint,
         )
+        if not candidates:
+            candidates = await self.client.search_recording(
+                core_title,
+                track.artist,
+                track.duration_seconds,
+            )
+        if not candidates and movie_hint:
+            candidates = await self.client.search_recording(
+                core_title,
+                None,
+                track.duration_seconds,
+                release=movie_hint,
+            )
         if not candidates:
             candidates = await self.client.search_recording(core_title, None, track.duration_seconds)
         if not candidates:
             return None
 
-        picked = _pick_best_recording(candidates, core_title, track.artist, track.duration_seconds)
+        picked = _pick_best_recording(
+            candidates,
+            core_title,
+            track.artist,
+            track.duration_seconds,
+            movie_hint,
+        )
         if not picked or not picked.get("id"):
             return None
 
@@ -180,6 +263,7 @@ class SongEnrichmentService:
         mbid = recording.get("id")
         performed_by = _artist_credit_names(recording)
         composed_by: list[str] = []
+        lyricist_by: list[str] = []
 
         for rel in recording.get("relations") or []:
             if rel.get("type") != "performance":
@@ -193,8 +277,12 @@ class SongEnrichmentService:
             composed_by.extend(
                 _relation_artist_names(work_data.get("relations") or [], COMPOSER_REL_TYPES)
             )
+            lyricist_by.extend(
+                _relation_artist_names(work_data.get("relations") or [], LYRICIST_REL_TYPES)
+            )
 
         composed_by = list(dict.fromkeys(composed_by))
+        lyricist_by = list(dict.fromkeys(lyricist_by))
         release_year = _parse_year(recording.get("first-release-date"))
         if not release_year:
             for release in recording.get("releases") or []:
@@ -206,6 +294,7 @@ class SongEnrichmentService:
             musicbrainz_id=mbid,
             song_name=(recording.get("title") or "").strip() or None,
             composed_by=composed_by,
+            lyricist_by=lyricist_by,
             performed_by=performed_by,
             movie_name=_release_group_movie_name(recording),
             release_year=release_year,
@@ -219,8 +308,10 @@ class SongEnrichmentService:
     ) -> SongEnrichment | None:
         if song.enrichment_metadata and song.musicbrainz_id:
             cached = SongEnrichment.from_dict(song.enrichment_metadata)
-            if cached:
+            if cached and _enrichment_matches_track(cached, track):
                 return cached
+            song.enrichment_metadata = None
+            song.musicbrainz_id = None
 
         enrichment = await self.enrich_track(track)
         if not enrichment or not enrichment.musicbrainz_id:
@@ -231,7 +322,9 @@ class SongEnrichmentService:
         )
         duplicate = existing.scalar_one_or_none()
         if duplicate and duplicate.id != song.id:
-            return SongEnrichment.from_dict(duplicate.enrichment_metadata) or enrichment
+            dup_cached = SongEnrichment.from_dict(duplicate.enrichment_metadata)
+            if dup_cached and _enrichment_matches_track(dup_cached, track):
+                return dup_cached
 
         song.musicbrainz_id = enrichment.musicbrainz_id
         song.enrichment_metadata = enrichment.to_dict()
@@ -262,11 +355,6 @@ class SongEnrichmentService:
         if not song:
             return None
 
-        if not refresh and song.enrichment_metadata:
-            cached = SongEnrichment.from_dict(song.enrichment_metadata)
-            if cached:
-                return cached
-
         if not track:
             artist_name = ""
             if song.artist_id:
@@ -284,5 +372,10 @@ class SongEnrichmentService:
                 duration_seconds=song.duration_seconds,
                 thumbnail_url=None,
             )
+
+        if not refresh and song.enrichment_metadata:
+            cached = SongEnrichment.from_dict(song.enrichment_metadata)
+            if cached and _enrichment_matches_track(cached, track):
+                return cached
 
         return await self.enrich_and_persist(session, song, track)
