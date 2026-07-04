@@ -44,7 +44,9 @@ class SongNormalizer(SongNormalizerPort):
             base = f"{base}|{bucket}"
         return sha256(base.encode()).hexdigest()[:32]
 
-    async def resolve_canonical(self, track: ProviderTrack, session: AsyncSession) -> SongModel:
+    async def resolve_canonical(
+        self, track: ProviderTrack, session: AsyncSession, *, semantic_match: bool = True
+    ) -> SongModel:
         song = await self._find_by_provider_track(session, track)
         if song:
             await self._upgrade_song_metadata(session, song, track)
@@ -61,11 +63,12 @@ class SongNormalizer(SongNormalizerPort):
             await self._ensure_provider_mapping(session, song, track)
             return song
 
-        song = await self._find_semantic_match(session, track)
-        if song:
-            await self._upgrade_song_metadata(session, song, track)
-            await self._ensure_provider_mapping(session, song, track)
-            return song
+        if semantic_match:
+            song = await self._find_semantic_match(session, track)
+            if song:
+                await self._upgrade_song_metadata(session, song, track)
+                await self._ensure_provider_mapping(session, song, track)
+                return song
 
         artist_result = await session.execute(
             select(ArtistModel).where(ArtistModel.normalized_name == _normalize_text(track.artist))

@@ -16,6 +16,8 @@ from app.domain.interfaces import MusicProvider
 logger = structlog.get_logger()
 
 QUICK_SEARCH_TIMEOUT_SEC = 50.0
+DISCOVERY_SEARCH_TIMEOUT_SEC = 35.0
+DISCOVERY_RESOLVE_CAP = 30
 
 
 def _effective_release_year(song: SongModel, track: ProviderTrack) -> int | None:
@@ -117,22 +119,35 @@ class RecommendationEngine:
 
         search_query = augment_search_query(query, preferred_languages)
 
-        # 1. Search
-        candidates = await provider.search(search_query, limit=limit * 3)
+        # 1. Search (bounded wait — yt-dlp can hang on slow networks)
+        try:
+            candidates = await asyncio.wait_for(
+                provider.search(search_query, limit=limit * 2),
+                timeout=QUICK_SEARCH_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("recommend_search_timeout", query=query)
+            candidates = []
+        except Exception as e:
+            logger.exception("recommend_search_failed", query=query, error=str(e))
+            candidates = []
 
-        # 2. Normalize & resolve canonical IDs
-        for track in candidates:
-            song = await self.normalizer.resolve_canonical(track, session)
-            track.canonical_song_id = song.id
-            resolved_year = _effective_release_year(song, track)
-            if resolved_year:
-                track.release_year = resolved_year
+        # 2. Light pre-filter before any DB canonical work
+        candidates = await self._apply_user_blocks(session, user_id, candidates)
+        candidates = filter_tracks_by_language(candidates, preferred_languages)
+        if year_from or year_to:
+            y_min = year_from or 1900
+            y_max = year_to or 2100
+            candidates = [
+                t
+                for t in candidates
+                if t.release_year is None or (y_min <= t.release_year <= y_max)
+            ]
 
-        # 3. Remove duplicates (same canonical song or semantically same track)
-        seen: set[UUID] = set()
-        unique: list[ProviderTrack] = []
+        seen_ids: set[str] = set()
+        prefiltered: list[ProviderTrack] = []
         for track in candidates:
-            if track.canonical_song_id and track.canonical_song_id in seen:
+            if track.provider_track_id in seen_ids:
                 continue
             if any(
                 is_same_song(
@@ -143,11 +158,24 @@ class RecommendationEngine:
                     kept.artist,
                     kept.duration_seconds,
                 )
-                for kept in unique
+                for kept in prefiltered
             ):
                 continue
-            if track.canonical_song_id:
-                seen.add(track.canonical_song_id)
+            seen_ids.add(track.provider_track_id)
+            prefiltered.append(track)
+
+        # 3. Resolve canonical IDs (fast path — skip semantic DB scan)
+        seen_canonical: set[UUID] = set()
+        unique: list[ProviderTrack] = []
+        for track in prefiltered[:DISCOVERY_RESOLVE_CAP]:
+            song = await self.normalizer.resolve_canonical(track, session, semantic_match=False)
+            if song.id in seen_canonical:
+                continue
+            seen_canonical.add(song.id)
+            track.canonical_song_id = song.id
+            resolved_year = _effective_release_year(song, track)
+            if resolved_year:
+                track.release_year = resolved_year
             unique.append(track)
 
         # 4. Memory filter – remove blocked songs (unless include heard / allow replays)
@@ -157,28 +185,12 @@ class RecommendationEngine:
             blocked = await self.memory.get_blocked_song_ids(session, user_id)
             filtered = [t for t in unique if t.canonical_song_id not in blocked]
 
-        # 5. Block lists from preferences
-        filtered = await self._apply_user_blocks(session, user_id, filtered)
-
-        # 5a. Language preference filter
-        filtered = filter_tracks_by_language(filtered, preferred_languages)
-
         # 5b. Exclude playlist songs from discovery
         if exclude_song_ids:
             filtered = [
                 t
                 for t in filtered
                 if not t.canonical_song_id or t.canonical_song_id not in exclude_song_ids
-            ]
-
-        # 5c. Year range filter — drop only tracks with a known year outside the range
-        if year_from or year_to:
-            y_min = year_from or 1900
-            y_max = year_to or 2100
-            filtered = [
-                t
-                for t in filtered
-                if t.release_year is None or (y_min <= t.release_year <= y_max)
             ]
 
         # 6. Score

@@ -25,6 +25,8 @@ export const useHomeStore = create<HomeState>((set, get) => ({
     try {
       const res = await api.getHomeRecommendations();
       set({ sections: res.sections, loaded: true });
+    } catch {
+      set({ sections: [], loaded: true });
     } finally {
       set({ loading: false });
     }

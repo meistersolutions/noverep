@@ -1,5 +1,6 @@
 from uuid import UUID
 
+import asyncio
 import random
 import structlog
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from app.infrastructure.database.models import (
 logger = structlog.get_logger()
 
 TARGET_QUEUE_SIZE = 20
+QUEUE_SYNC_TIMEOUT_SEC = 55.0
 
 
 @dataclass
@@ -369,6 +371,23 @@ class QueueService:
         if await self._is_playlist_mode(session, user_id):
             return await self.get_queue(session, user_id)
 
+        try:
+            return await asyncio.wait_for(
+                self._sync_queue_impl(session, user_id, target_size),
+                timeout=QUEUE_SYNC_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("queue_sync_timeout", user_id=str(user_id))
+            await session.flush()
+            return await self.get_queue(session, user_id)
+
+    async def _sync_queue_impl(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        target_size: int = TARGET_QUEUE_SIZE,
+    ) -> list[QueueItemModel]:
+
         queue = await self.get_queue(session, user_id)
 
         if not queue:
@@ -401,7 +420,7 @@ class QueueService:
 
         query_idx = 0
         attempts = 0
-        max_attempts = target_size * 5
+        max_attempts = min(target_size * 2, 16)
 
         while len(queue) < target_size and attempts < max_attempts:
             attempts += 1
@@ -497,7 +516,7 @@ class QueueService:
         queue = await self.get_queue(session, user_id)
         query_idx = 0
         attempts = 0
-        max_attempts = target_size * 5
+        max_attempts = min(target_size * 2, 16)
         seed_artists = recent["artists"] + ([current.artist] if current else [])
 
         while len(queue) < target_size and attempts < max_attempts:
@@ -566,7 +585,7 @@ class QueueService:
         queries = self._build_discovery_queries(pref)
         query_idx = 0
         attempts = 0
-        max_attempts = target_size * 5
+        max_attempts = min(target_size * 2, 16)
 
         while len(queue) < target_size and attempts < max_attempts:
             attempts += 1

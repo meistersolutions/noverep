@@ -86,6 +86,11 @@ export default function HomePage() {
             <div key={i} className="glass h-16 animate-pulse" />
           ))}
         </div>
+      ) : sections.length === 0 ? (
+        <p className="text-white/50 text-sm glass p-4 rounded-xl">
+          No recommendations right now. Try refreshing, or use Search / Queue refresh to discover
+          music.
+        </p>
       ) : (
         sections.map((section) => (
           <section key={section.title}>

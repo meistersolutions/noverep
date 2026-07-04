@@ -285,9 +285,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           return;
         }
 
-        let queue = await api.syncQueue();
+        let queue = await api.syncQueue().catch(() => null);
         if (!queue?.length) {
-          queue = await api.refreshQueueFromPreferences();
+          queue = await api.refreshQueueFromPreferences().catch(() => null);
         }
         if (queue?.length) {
           const snapshot = applyQueueSnapshot(queue, get().currentTrack, playing);

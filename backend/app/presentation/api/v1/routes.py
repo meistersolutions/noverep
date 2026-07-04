@@ -1137,7 +1137,16 @@ async def home_recommendations(
     session: AsyncSession = Depends(get_db_session),
     home_svc: HomeRecommendationService = Depends(get_home_recommendations_service),
 ):
-    sections = await home_svc.get_home_sections(session, user.id)
+    import asyncio
+
+    try:
+        sections = await asyncio.wait_for(
+            home_svc.get_home_sections(session, user.id),
+            timeout=70.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("home_recommendations_timeout", user_id=str(user.id))
+        sections = []
     return HomeRecommendationsResponse(
         sections=[HomeSectionResponse(title=s["title"], tracks=s["tracks"]) for s in sections]
     )

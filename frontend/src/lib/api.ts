@@ -115,7 +115,11 @@ function formatApiError(detail: unknown): string {
   return 'Request failed';
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  timeoutMs = 120_000,
+): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -123,15 +127,31 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatApiError(err.detail) || res.statusText);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(formatApiError(err.detail) || res.statusText);
+    }
+    if (res.status === 204) return undefined as T;
+    const text = await res.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Request timed out — try again');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
 }
 
 export const api = {
@@ -210,14 +230,15 @@ export const api = {
   clearQueue: () => request('/queue', { method: 'DELETE' }),
   fillQueue: (minimum = 20) =>
     request<QueueItem[]>(`/queue/fill?minimum=${minimum}`, { method: 'POST' }),
-  syncQueue: () => request<QueueItem[]>('/queue/sync', { method: 'POST' }),
+  syncQueue: () =>
+    request<QueueItem[]>('/queue/sync', { method: 'POST' }, 90_000),
   refreshQueue: (seed: string, options?: QueueRefreshOptions) => {
     const params = new URLSearchParams({ seed });
     if (options?.languages?.length) params.set('languages', options.languages.join(','));
     if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
     if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
     if (options?.includeHeard) params.set('include_heard', 'true');
-    return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' });
+    return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' }, 90_000);
   },
   refreshQueueFromPreferences: (options?: QueueRefreshOptions) => {
     const params = new URLSearchParams({ from_preferences: 'true' });
@@ -225,7 +246,7 @@ export const api = {
     if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
     if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
     if (options?.includeHeard) params.set('include_heard', 'true');
-    return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' });
+    return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' }, 90_000);
   },
   clearActiveSearch: () =>
     request<UserPreferences>('/preferences', {
@@ -355,7 +376,11 @@ export const api = {
   }) =>
     request('/onboarding', { method: 'POST', body: JSON.stringify(data) }),
   getHomeRecommendations: () =>
-    request<{ sections: { title: string; tracks: Track[] }[] }>('/recommendations/home'),
+    request<{ sections: { title: string; tracks: Track[] }[] }>(
+      '/recommendations/home',
+      {},
+      75_000,
+    ),
   submitFeedback: (data: {
     feedback_type: 'bug' | 'feature';
     title: string;

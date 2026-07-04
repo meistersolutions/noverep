@@ -1,4 +1,3 @@
-import asyncio
 import random
 from uuid import UUID
 
@@ -13,6 +12,9 @@ from app.application.services.language_utils import (
 )
 from app.application.services.recommendation_engine import RecommendationEngine
 from app.infrastructure.database.models import PlaylistItemModel, PlaylistModel, UserPreferencesModel
+
+HOME_SECTION_COUNT = 2
+HOME_SECTION_LIMIT = 6
 
 
 class HomeRecommendationService:
@@ -39,55 +41,87 @@ class HomeRecommendationService:
         year_to = getattr(prefs, "discovery_year_to", None) if prefs else None
 
         seen_ids: set[str] = set()
-        home_queries = build_random_home_queries(languages, section_count=3)
+        home_queries = build_random_home_queries(languages, section_count=HOME_SECTION_COUNT)
         random.shuffle(home_queries)
 
-        async def build_section(title: str, query: str, limit: int = 6) -> dict | None:
-            scored = await self.engine.recommend(
+        sections: list[dict] = []
+        for hq in home_queries:
+            section = await self._build_section(
                 session,
                 user_id,
-                query,
-                limit=limit + len(seen_ids),
-                exclude_song_ids=exclude_song_ids,
-                year_from=year_from,
-                year_to=year_to,
-                preferred_languages=languages,
+                hq.title,
+                hq.query,
+                seen_ids,
+                exclude_song_ids,
+                year_from,
+                year_to,
+                languages,
             )
-            random.shuffle(scored)
-            tracks: list[TrackResponse] = []
-            for c in scored:
-                tid = c.track.provider_track_id
-                if tid in seen_ids:
-                    continue
-                seen_ids.add(tid)
-                tracks.append(
-                    TrackResponse(
-                        provider=c.track.provider,
-                        provider_track_id=c.track.provider_track_id,
-                        title=c.track.title,
-                        artist=c.track.artist,
-                        album=c.track.album,
-                        duration_seconds=c.track.duration_seconds,
-                        thumbnail_url=c.track.thumbnail_url,
-                        canonical_song_id=c.track.canonical_song_id,
-                        score=c.score,
-                    )
-                )
-                if len(tracks) >= limit:
-                    break
-            if tracks:
-                return {"title": title, "tracks": tracks}
-            return None
-
-        built = await asyncio.gather(
-            *[build_section(hq.title, hq.query) for hq in home_queries]
-        )
-        sections = [s for s in built if s]
+            if section:
+                sections.append(section)
 
         if not sections:
             lang = random.choice(languages)
-            fallback = await build_section("Discover New Music", random_lang_discovery_query(lang))
+            fallback = await self._build_section(
+                session,
+                user_id,
+                "Discover New Music",
+                random_lang_discovery_query(lang),
+                seen_ids,
+                exclude_song_ids,
+                year_from,
+                year_to,
+                languages,
+            )
             if fallback:
                 sections.append(fallback)
 
         return sections
+
+    async def _build_section(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        title: str,
+        query: str,
+        seen_ids: set[str],
+        exclude_song_ids: set,
+        year_from: int | None,
+        year_to: int | None,
+        languages: list[str],
+    ) -> dict | None:
+        scored = await self.engine.recommend(
+            session,
+            user_id,
+            query,
+            limit=HOME_SECTION_LIMIT + len(seen_ids),
+            exclude_song_ids=exclude_song_ids,
+            year_from=year_from,
+            year_to=year_to,
+            preferred_languages=languages,
+        )
+        random.shuffle(scored)
+        tracks: list[TrackResponse] = []
+        for c in scored:
+            tid = c.track.provider_track_id
+            if tid in seen_ids:
+                continue
+            seen_ids.add(tid)
+            tracks.append(
+                TrackResponse(
+                    provider=c.track.provider,
+                    provider_track_id=c.track.provider_track_id,
+                    title=c.track.title,
+                    artist=c.track.artist,
+                    album=c.track.album,
+                    duration_seconds=c.track.duration_seconds,
+                    thumbnail_url=c.track.thumbnail_url,
+                    canonical_song_id=c.track.canonical_song_id,
+                    score=c.score,
+                )
+            )
+            if len(tracks) >= HOME_SECTION_LIMIT:
+                break
+        if tracks:
+            return {"title": title, "tracks": tracks}
+        return None
