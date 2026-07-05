@@ -3,12 +3,14 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { Sidebar } from '@/components/Sidebar';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { PlayerBar } from '@/components/PlayerBar';
+import { YouTubePlayer } from '@/components/YouTubePlayer';
 import { OnboardingModal } from '@/components/OnboardingModal';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import AuthPage from '@/pages/AuthPage';
 import QueuePage from '@/pages/QueuePage';
 import { api } from '@/lib/api';
+import { warmUpPlayback } from '@/lib/youtubePlayerController';
 import { Loader2 } from 'lucide-react';
 
 const HomePage = lazy(() => import('@/pages/HomePage'));
@@ -21,9 +23,6 @@ const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'));
 const FeedbackPage = lazy(() => import('@/pages/FeedbackPage'));
 const ProfilePage = lazy(() => import('@/pages/ProfilePage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
-const YouTubePlayer = lazy(() =>
-  import('@/components/YouTubePlayer').then((m) => ({ default: m.YouTubePlayer })),
-);
 
 function RouteFallback() {
   return (
@@ -47,6 +46,10 @@ function MainApp() {
   useEffect(() => {
     if (token) init();
   }, [token, init]);
+
+  useEffect(() => {
+    if (initialized) warmUpPlayback();
+  }, [initialized]);
 
   useEffect(() => {
     if (initialized && preferences && !preferences.onboarding_completed) {
@@ -102,9 +105,7 @@ function MainApp() {
         </Suspense>
       </main>
       <MobileBottomNav />
-      <Suspense fallback={null}>
-        <YouTubePlayer />
-      </Suspense>
+      <YouTubePlayer />
       <PlayerBar />
     </div>
   );

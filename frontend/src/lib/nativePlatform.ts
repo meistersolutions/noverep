@@ -10,3 +10,14 @@ export function isIOSNative(): boolean {
 export function isAndroidNative(): boolean {
   return isNativeApp && nativePlatform === 'android';
 }
+
+/** Mobile browser (Chrome/Safari) — not the Capacitor shell. */
+export function isMobileBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+/** YouTube iframe needs real dimensions off-screen on mobile WebViews and mobile browsers. */
+export function needsOffscreenPlayer(): boolean {
+  return isNativeApp || isMobileBrowser();
+}

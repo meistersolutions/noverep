@@ -2,7 +2,17 @@ import { create } from 'zustand';
 import { api, QueueItem, Track, UserPreferences, QueueRefreshOptions } from '@/lib/api';
 import { isSameSong } from '@/lib/songMatcher';
 import { recordPlayProgress, recordPlayStart } from '@/lib/playbackHistory';
-import { setWantPlaying, prepareTrackTransition, getActiveVideoId, cueVideoForResume } from '@/lib/youtubePlayerController';
+import {
+  setWantPlaying,
+  prepareTrackTransition,
+  getActiveVideoId,
+  cueVideoForResume,
+  loadAndPlay,
+  prefetchVideo,
+  pausePlayback,
+  resumePlayback,
+  warmUpPlayback,
+} from '@/lib/youtubePlayerController';
 import {
   clearCachedPreferences,
   readCachedPreferences,
@@ -163,12 +173,10 @@ function applyServerQueueAfterSkip(serverQueue: QueueItem[], serverItem: QueueIt
 async function prefetchUpcoming(queue: QueueItem[]) {
   const next = localNextInQueue(queue);
   if (!next) return;
-  const { prefetchVideo } = await import('@/lib/youtubePlayerController');
   prefetchVideo(next.provider_track_id);
 }
 
-async function beginPlayback(item: QueueItem, volume: number) {
-  const { loadAndPlay } = await import('@/lib/youtubePlayerController');
+function beginPlayback(item: QueueItem, volume: number) {
   void loadAndPlay(item.provider_track_id, volume * 100);
 }
 
@@ -292,6 +300,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
 
     set({ initialized: true });
+
+    warmUpPlayback();
 
     void api.getMe().then((me) => {
       set({ isAdmin: me.is_admin });
@@ -457,21 +467,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (get().isPlaying === playing) return;
     setWantPlaying(playing);
     set({ isPlaying: playing });
-    import('@/lib/youtubePlayerController').then(
-      async ({ resumePlayback, pausePlayback, loadAndPlay, getActiveVideoId }) => {
-        if (playing) {
-          const track = get().currentTrack;
-          const activeId = getActiveVideoId();
-          if (track?.provider_track_id && track.provider_track_id !== activeId) {
-            await loadAndPlay(track.provider_track_id, get().volume * 100);
-          } else {
-            resumePlayback();
-          }
-        } else {
-          pausePlayback();
-        }
-      },
-    );
+    if (playing) {
+      const track = get().currentTrack;
+      const activeId = getActiveVideoId();
+      if (track?.provider_track_id && track.provider_track_id !== activeId) {
+        void loadAndPlay(track.provider_track_id, get().volume * 100);
+      } else {
+        resumePlayback();
+      }
+    } else {
+      pausePlayback();
+    }
     if (!playing) {
       const { currentTime, duration } = get();
       if (currentTime >= 30 || (duration > 0 && currentTime / duration >= 0.5)) {
@@ -486,6 +492,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   playTrack: async (track, explicit = false) => {
     setWantPlaying(true);
+    prepareTrackTransition();
     set({
       currentTrack: { ...track },
       isPlaying: true,
@@ -495,8 +502,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       activePlaylistId: null,
     });
 
-    const { loadAndPlay } = await import('@/lib/youtubePlayerController');
-    await loadAndPlay(track.provider_track_id, get().volume * 100);
+    try {
+      await loadAndPlay(track.provider_track_id, get().volume * 100);
+    } catch {
+      set({ isPlaying: false });
+      throw new Error('Could not start playback — try again');
+    }
 
     try {
       await recordPlayStart(track, get().sessionId);
@@ -624,7 +635,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         duration: item.duration_seconds ?? 0,
       });
 
-      const { loadAndPlay } = await import('@/lib/youtubePlayerController');
       await loadAndPlay(item.provider_track_id, get().volume * 100);
 
       try {
@@ -655,7 +665,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       activePlaylistId: playlistId,
     });
 
-    const { loadAndPlay } = await import('@/lib/youtubePlayerController');
     await loadAndPlay(current.provider_track_id, get().volume * 100);
 
     try {

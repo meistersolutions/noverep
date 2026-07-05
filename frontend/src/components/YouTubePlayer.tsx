@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Capacitor } from '@capacitor/core';
 import { usePlayerStore } from '@/stores/playerStore';
+import { needsOffscreenPlayer } from '@/lib/nativePlatform';
 import {
   getPlayer,
   handlePlayerStateChange,
@@ -8,7 +8,9 @@ import {
   setOnPlayingChange,
   setOnActiveVideoId,
   setPlayerInstance,
+  setVolumeLevel,
   setWantPlaying,
+  warmUpPlayback,
   waitForYouTubeApi,
 } from '@/lib/youtubePlayerController';
 import { updateMediaSession, setupMediaSessionHandlers } from '@/lib/mediaSession';
@@ -17,6 +19,24 @@ import { initBackgroundPlayback, onPlaybackStateChange } from '@/lib/backgroundP
 const CONTAINER_ID = 'noverep-yt-player';
 
 let globalPlayerCreated = false;
+
+const OFFSCREEN_PLAYER_STYLE: React.CSSProperties = {
+  width: 320,
+  height: 180,
+  opacity: 0.01,
+  left: -9999,
+  top: 0,
+  zIndex: 0,
+};
+
+const DESKTOP_PLAYER_STYLE: React.CSSProperties = {
+  width: 1,
+  height: 1,
+  opacity: 0.01,
+  left: 0,
+  bottom: 0,
+  zIndex: 0,
+};
 
 export function YouTubePlayer() {
   const {
@@ -39,6 +59,10 @@ export function YouTubePlayer() {
   autoplayRef.current = autoplay;
 
   useEffect(() => {
+    warmUpPlayback();
+  }, []);
+
+  useEffect(() => {
     if (globalPlayerCreated) return;
     globalPlayerCreated = true;
 
@@ -46,9 +70,10 @@ export function YouTubePlayer() {
       await waitForYouTubeApi();
       if (!window.YT?.Player || getPlayer()) return;
 
+      const useOffscreen = needsOffscreenPlayer();
       const instance = new window.YT.Player(CONTAINER_ID, {
-        height: '200',
-        width: '200',
+        height: useOffscreen ? '180' : '200',
+        width: useOffscreen ? '320' : '200',
         playerVars: {
           autoplay: 0,
           controls: 0,
@@ -56,6 +81,7 @@ export function YouTubePlayer() {
           rel: 0,
           modestbranding: 1,
           enablejsapi: 1,
+          fs: 0,
           origin: window.location.origin,
         },
         events: {
@@ -67,7 +93,7 @@ export function YouTubePlayer() {
       });
     };
 
-    init();
+    void init();
   }, []);
 
   useEffect(() => {
@@ -118,9 +144,7 @@ export function YouTubePlayer() {
   }, [isPlaying, currentTrack?.provider_track_id]);
 
   useEffect(() => {
-    import('@/lib/youtubePlayerController').then(({ setVolumeLevel }) => {
-      setVolumeLevel(volume * 100);
-    });
+    setVolumeLevel(volume * 100);
   }, [volume]);
 
   useEffect(() => {
@@ -136,32 +160,11 @@ export function YouTubePlayer() {
     return () => clearInterval(id);
   }, [setCurrentTime, setDuration, syncFromPlayer]);
 
-  const isNative = Capacitor.isNativePlatform();
-
   return (
     <div
       aria-hidden
       className="pointer-events-none fixed overflow-hidden"
-      style={
-        isNative
-          ? {
-              // iOS/Android WebViews may pause zero-size iframes; keep a real player off-screen.
-              width: 320,
-              height: 180,
-              opacity: 0.01,
-              left: -9999,
-              top: 0,
-              zIndex: 0,
-            }
-          : {
-              width: 1,
-              height: 1,
-              opacity: 0.01,
-              left: 0,
-              bottom: 0,
-              zIndex: 0,
-            }
-      }
+      style={needsOffscreenPlayer() ? OFFSCREEN_PLAYER_STYLE : DESKTOP_PLAYER_STYLE}
     >
       <div id={CONTAINER_ID} />
     </div>

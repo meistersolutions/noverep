@@ -1,5 +1,7 @@
 /** Singleton YouTube IFrame player – survives React re-renders. */
 
+import { isMobileBrowser } from '@/lib/nativePlatform';
+
 export interface YTPlayerInstance {
   loadVideoById: (videoId: string) => void;
   cueVideoById: (videoId: string) => void;
@@ -56,7 +58,7 @@ function notifyActiveVideo(videoId: string) {
 
 let apiScriptRequested = false;
 
-function ensureYouTubeApiScript(): void {
+export function ensureYouTubeApiScript(): void {
   if (apiScriptRequested || window.YT?.Player) return;
   apiScriptRequested = true;
   if (document.getElementById('youtube-iframe-api')) return;
@@ -66,6 +68,21 @@ function ensureYouTubeApiScript(): void {
   tag.src = 'https://www.youtube.com/iframe_api';
   tag.async = true;
   document.head.appendChild(tag);
+}
+
+export function warmUpPlayback(): void {
+  ensureYouTubeApiScript();
+}
+
+export async function ensurePlaybackReady(timeoutMs = 20000): Promise<boolean> {
+  try {
+    ensureYouTubeApiScript();
+    await waitForYouTubeApi();
+    await waitForPlayer(timeoutMs);
+    return Boolean(player);
+  } catch {
+    return false;
+  }
 }
 
 export function waitForYouTubeApi(): Promise<void> {
@@ -87,9 +104,25 @@ export function waitForYouTubeApi(): Promise<void> {
   });
 }
 
-export function waitForPlayer(): Promise<void> {
+export function waitForPlayer(timeoutMs = 30000): Promise<void> {
   if (playerReady && player) return Promise.resolve();
-  return new Promise((resolve) => playerWaiters.push(resolve));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn();
+    };
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(
+            () => finish(() => reject(new Error('YouTube player not ready'))),
+            timeoutMs,
+          )
+        : null;
+    playerWaiters.push(() => finish(resolve));
+  });
 }
 
 export function setPlayerInstance(instance: YTPlayerInstance | null) {
@@ -143,7 +176,12 @@ export function setOnActiveVideoId(cb: ((videoId: string) => void) | null) {
 
 function schedulePlayRetries(videoId: string, generation: number) {
   if (!allowAutoResume) return;
-  const delays = document.hidden ? backgroundRetryMs : [400, 1200];
+  const mobile = isMobileBrowser();
+  const delays = document.hidden
+    ? backgroundRetryMs
+    : mobile
+      ? [0, 80, 200, 500, 1000, 2000, 3500]
+      : [0, 400, 1200];
   delays.forEach((ms) => {
     setTimeout(() => {
       if (generation !== playbackGeneration) return;
@@ -248,9 +286,10 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
 }
 
 export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
+  ensureYouTubeApiScript();
   await waitForYouTubeApi();
-  await waitForPlayer();
-  if (!player) return;
+  await waitForPlayer(isMobileBrowser() ? 25000 : 30000);
+  if (!player) throw new Error('YouTube player unavailable');
 
   const generation = ++playbackGeneration;
   wantPlaying = true;
