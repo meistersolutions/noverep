@@ -1,0 +1,16 @@
+https://github.com/meistersolutions/noverep
+https://dashboard.render.com/web/srv-d8vto4n7f7vs739im3h0/events
+
+cd C:\Users\smile\Projects\noverep
+git add -A
+git commit -m "Fix Applied: Fix Queue"
+git push
+
+
+cloudflared tunnel --url http://localhost:5173
+
+
+git add -A ; git commit -m "Fix Applied: Lib from MUSICBRAINZ" ; git push
+
+
+

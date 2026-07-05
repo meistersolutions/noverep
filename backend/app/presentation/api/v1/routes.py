@@ -116,6 +116,7 @@ def _track_response(track, score: float | None = None) -> TrackResponse:
         thumbnail_url=track.thumbnail_url,
         canonical_song_id=track.canonical_song_id,
         score=score,
+        content_kind=getattr(track, "content_kind", "song") or "song",
     )
 
 
@@ -209,6 +210,10 @@ async def search(
         default=True,
         description="Literal search without user preferences (song filter only)",
     ),
+    any_video: bool = Query(
+        default=False,
+        description="Search any YouTube video (not limited to single songs)",
+    ),
     user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
     engine: RecommendationEngine = Depends(get_recommendation_engine),
@@ -216,7 +221,9 @@ async def search(
     scored = []
     try:
         if raw:
-            scored = await engine.raw_search(q, provider_name=provider, limit=limit)
+            scored = await engine.raw_search(
+                q, provider_name=provider, limit=limit, any_video=any_video
+            )
         elif quick:
             scored = await engine.quick_search(
                 session,
@@ -494,7 +501,10 @@ async def add_to_queue(
     provider = providers.get(body.provider)
     if not provider:
         raise HTTPException(status_code=400, detail="Unknown provider")
-    track = await provider.get_metadata(body.provider_track_id)
+    track = await provider.get_metadata(
+        body.provider_track_id,
+        songs_only=not body.audio_only,
+    )
     try:
         item = await queue_svc.add_to_queue(
             session, user.id, track,
@@ -503,7 +513,7 @@ async def add_to_queue(
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    if settings.musicbrainz_enabled and item.song_id:
+    if settings.musicbrainz_enabled and item.song_id and not body.audio_only:
         background_tasks.add_task(
             run_song_enrichment_background,
             item.song_id,
@@ -569,7 +579,10 @@ async def play_next_in_queue(
     provider = providers.get(body.provider)
     if not provider:
         raise HTTPException(status_code=400, detail="Unknown provider")
-    track = await provider.get_metadata(body.provider_track_id)
+    track = await provider.get_metadata(
+        body.provider_track_id,
+        songs_only=not body.audio_only,
+    )
     try:
         item = await queue_svc.insert_play_next(
             session, user.id, track, explicitly_requested=body.explicitly_requested

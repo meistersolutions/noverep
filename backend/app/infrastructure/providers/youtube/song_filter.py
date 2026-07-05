@@ -96,3 +96,16 @@ def filter_song_tracks(tracks: list, limit: int) -> list:
         if len(result) >= limit:
             break
     return result
+
+
+def filter_any_video_tracks(tracks: list, limit: int) -> list:
+    """Keep any YouTube result with a usable title (no song-only heuristics)."""
+    result = []
+    for track in tracks:
+        title = (track.title or "").strip()
+        if len(title) < 2:
+            continue
+        result.append(track)
+        if len(result) >= limit:
+            break
+    return result

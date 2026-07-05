@@ -222,8 +222,10 @@ class RecommendationEngine:
         query: str,
         provider_name: str = "youtube",
         limit: int = 20,
+        *,
+        any_video: bool = False,
     ) -> list[ScoredCandidate]:
-        """Literal search — user query only, song-filter at provider (no prefs/blocks)."""
+        """Literal search — user query only; optional any-YouTube-video mode."""
         provider = self.providers.get(provider_name)
         if not provider:
             return []
@@ -232,9 +234,15 @@ class RecommendationEngine:
         if not search_query:
             return []
 
+        songs_only = not any_video
         try:
             candidates = await asyncio.wait_for(
-                provider.search(search_query, limit=limit + 10, raw=True),
+                provider.search(
+                    search_query,
+                    limit=limit + 10,
+                    raw=True,
+                    songs_only=songs_only,
+                ),
                 timeout=QUICK_SEARCH_TIMEOUT_SEC,
             )
         except asyncio.TimeoutError:

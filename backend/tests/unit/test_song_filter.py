@@ -24,3 +24,23 @@ class TestSongFilter:
 
     def test_rejects_instrumental(self):
         assert not is_single_song_track("Song Name - Piano Cover", 240)
+
+
+class TestAnyVideoFilter:
+    def test_accepts_long_non_song_title(self):
+        from app.domain.entities import ProviderTrack
+        from app.infrastructure.providers.youtube.song_filter import filter_any_video_tracks
+
+        tracks = [
+            ProviderTrack(
+                provider="youtube",
+                provider_track_id="1",
+                title="3 Hour Study With Me",
+                artist="Channel",
+                album=None,
+                duration_seconds=10800,
+                thumbnail_url=None,
+                content_kind="video",
+            )
+        ]
+        assert len(filter_any_video_tracks(tracks, 5)) == 1

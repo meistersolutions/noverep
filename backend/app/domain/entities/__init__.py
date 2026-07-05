@@ -39,6 +39,7 @@ class ProviderTrack:
     release_year: int | None = None
     isrc: str | None = None
     popularity: float = 0.0
+    content_kind: str = "song"  # "song" | "video"
 
 
 @dataclass

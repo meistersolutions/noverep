@@ -37,6 +37,7 @@ class TrackResponse(BaseModel):
     thumbnail_url: str | None
     canonical_song_id: UUID | None = None
     score: float | None = None
+    content_kind: str = "song"
 
 
 class SearchResponse(BaseModel):
@@ -91,6 +92,7 @@ class AddToQueueRequest(BaseModel):
     provider_track_id: str
     explicitly_requested: bool = False
     play_now: bool = False
+    audio_only: bool = False
 
 
 class PlayEventRequest(BaseModel):

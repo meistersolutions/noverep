@@ -12,11 +12,20 @@ class MusicProvider(ABC):
         ...
 
     @abstractmethod
-    async def search(self, query: str, limit: int = 20, *, raw: bool = False) -> list[ProviderTrack]:
+    async def search(
+        self,
+        query: str,
+        limit: int = 20,
+        *,
+        raw: bool = False,
+        songs_only: bool = True,
+    ) -> list[ProviderTrack]:
         ...
 
     @abstractmethod
-    async def get_metadata(self, provider_track_id: str) -> ProviderTrack:
+    async def get_metadata(
+        self, provider_track_id: str, *, songs_only: bool = True
+    ) -> ProviderTrack:
         ...
 
     async def get_stream_url(self, provider_track_id: str) -> str | None:

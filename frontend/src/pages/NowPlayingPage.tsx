@@ -61,6 +61,9 @@ export default function NowPlayingPage() {
 
       <div className="flex items-center gap-4 mt-4 text-sm text-white/50">
         <span className="capitalize px-2 py-0.5 rounded bg-white/10">{track.provider}</span>
+        {track.content_kind === 'video' && (
+          <span className="px-2 py-0.5 rounded bg-accent/15 text-accent text-xs">Audio only</span>
+        )}
         {isPlaying && <span className="text-accent">Now Playing</span>}
       </div>
 
@@ -87,13 +90,17 @@ export default function NowPlayingPage() {
         </button>
       </div>
 
-      <SongDetailsPanel
-        provider={track.provider}
-        providerTrackId={track.provider_track_id}
-        title={track.title}
-        artist={track.artist}
-      />
-      <LyricsPanel track={track as Track} />
+      {track.content_kind !== 'video' && (
+        <>
+          <SongDetailsPanel
+            provider={track.provider}
+            providerTrackId={track.provider_track_id}
+            title={track.title}
+            artist={track.artist}
+          />
+          <LyricsPanel track={track as Track} />
+        </>
+      )}
     </div>
   );
 }

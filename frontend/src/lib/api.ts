@@ -10,6 +10,7 @@ export interface Track {
   thumbnail_url: string | null;
   canonical_song_id?: string | null;
   score?: number | null;
+  content_kind?: 'song' | 'video';
 }
 
 export interface QueueItem extends Track {
@@ -170,9 +171,25 @@ export const api = {
       '/auth/register',
       { method: 'POST', body: JSON.stringify({ username, password, email }) },
     ),
-  search: async (q: string, provider = 'youtube', includeHeard = false, quick = true, raw = true) => {
-    const buildPath = (useQuick: boolean) =>
-      `/search?q=${encodeURIComponent(q)}&provider=${provider}&include_heard=${includeHeard}&quick=${useQuick}&raw=${raw}`;
+  search: async (
+    q: string,
+    provider = 'youtube',
+    includeHeard = false,
+    quick = true,
+    raw = true,
+    anyVideo = false,
+  ) => {
+    const buildPath = (useQuick: boolean) => {
+      const params = new URLSearchParams({
+        q,
+        provider,
+        include_heard: String(includeHeard),
+        quick: String(useQuick),
+        raw: String(raw),
+        any_video: String(anyVideo),
+      });
+      return `/search?${params}`;
+    };
     try {
       return await request<{ results: Track[]; total: number }>(buildPath(quick));
     } catch (err) {
@@ -217,10 +234,22 @@ export const api = {
     if (args.duration_seconds != null) params.set('duration_seconds', String(args.duration_seconds));
     return request<TrackLyrics | null>(`/tracks/lyrics?${params}`);
   },
-  addToQueue: (provider: string, provider_track_id: string, explicitly_requested = false, play_now = false) =>
+  addToQueue: (
+    provider: string,
+    provider_track_id: string,
+    explicitly_requested = false,
+    play_now = false,
+    audio_only = false,
+  ) =>
     request<QueueItem>('/queue', {
       method: 'POST',
-      body: JSON.stringify({ provider, provider_track_id, explicitly_requested, play_now }),
+      body: JSON.stringify({
+        provider,
+        provider_track_id,
+        explicitly_requested,
+        play_now,
+        audio_only,
+      }),
     }),
   nextTrack: (seed?: string) =>
     request<QueueItem | null>(`/queue/next${seed ? `?seed=${encodeURIComponent(seed)}` : ''}`, {
@@ -253,10 +282,20 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ active_search_query: null }),
     }),
-  playNextInQueue: (provider: string, provider_track_id: string, explicitly_requested = false) =>
+  playNextInQueue: (
+    provider: string,
+    provider_track_id: string,
+    explicitly_requested = false,
+    audio_only = false,
+  ) =>
     request<QueueItem>('/queue/play-next', {
       method: 'POST',
-      body: JSON.stringify({ provider, provider_track_id, explicitly_requested }),
+      body: JSON.stringify({
+        provider,
+        provider_track_id,
+        explicitly_requested,
+        audio_only,
+      }),
     }),
   playQueueItem: (itemId: string) =>
     request<QueueItem>(`/queue/play/${itemId}`, { method: 'POST' }),

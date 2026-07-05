@@ -70,8 +70,16 @@ class TestRawSearch:
         class FakeProvider:
             name = "youtube"
 
-            async def search(self, query: str, limit: int = 20, *, raw: bool = False):
+            async def search(
+                self,
+                query: str,
+                limit: int = 20,
+                *,
+                raw: bool = False,
+                songs_only: bool = True,
+            ):
                 assert raw is True
+                assert songs_only is True
                 assert query == "exact query"
                 return [track]
 
@@ -79,3 +87,35 @@ class TestRawSearch:
         results = await engine.raw_search("exact query", limit=5)
         assert len(results) == 1
         assert results[0].track.provider_track_id == "abc"
+
+    @pytest.mark.asyncio
+    async def test_raw_search_any_video_disables_song_filter(self):
+        track = ProviderTrack(
+            provider="youtube",
+            provider_track_id="vid",
+            title="Long Podcast Episode",
+            artist="Channel",
+            album=None,
+            duration_seconds=3600,
+            thumbnail_url=None,
+            content_kind="video",
+        )
+
+        class FakeProvider:
+            name = "youtube"
+
+            async def search(
+                self,
+                query: str,
+                limit: int = 20,
+                *,
+                raw: bool = False,
+                songs_only: bool = True,
+            ):
+                assert songs_only is False
+                return [track]
+
+        engine = RecommendationEngine({"youtube": FakeProvider()}, None, None)
+        results = await engine.raw_search("podcast", limit=5, any_video=True)
+        assert len(results) == 1
+        assert results[0].track.content_kind == "video"

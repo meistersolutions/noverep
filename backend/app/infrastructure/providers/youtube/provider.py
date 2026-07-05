@@ -8,6 +8,7 @@ import yt_dlp
 from app.domain.entities import ProviderTrack
 from app.domain.interfaces import MusicProvider
 from app.infrastructure.providers.youtube.song_filter import (
+    filter_any_video_tracks,
     filter_song_tracks,
     is_single_song_track,
     normalize_search_query,
@@ -41,7 +42,7 @@ def _parse_duration(title: str) -> tuple[str, str]:
 
 
 class YouTubeProvider(MusicProvider):
-    """YouTube music provider – songs only, no compilations."""
+    """YouTube music provider – songs only by default; optional any-video search."""
 
     SEARCH_BUFFER = 3  # fetch extra to allow filtering
 
@@ -63,14 +64,26 @@ class YouTubeProvider(MusicProvider):
             opts["ignore_no_formats_error"] = True
         return opts
 
-    async def search(self, query: str, limit: int = 20, *, raw: bool = False) -> list[ProviderTrack]:
-        return await asyncio.to_thread(self._search_sync, query, limit, raw)
+    async def search(
+        self,
+        query: str,
+        limit: int = 20,
+        *,
+        raw: bool = False,
+        songs_only: bool = True,
+    ) -> list[ProviderTrack]:
+        return await asyncio.to_thread(self._search_sync, query, limit, raw, songs_only)
 
-    def _search_sync(self, query: str, limit: int, raw: bool = False) -> list[ProviderTrack]:
-        normalized = query.strip() if raw else normalize_search_query(query)
+    def _search_sync(
+        self, query: str, limit: int, raw: bool = False, songs_only: bool = True
+    ) -> list[ProviderTrack]:
+        if songs_only:
+            normalized = query.strip() if raw else normalize_search_query(query)
+        else:
+            normalized = query.strip() or "video"
         fetch_count = min(limit * self.SEARCH_BUFFER, 60)
         search_query = f"ytsearch{fetch_count}:{normalized}"
-        raw: list[ProviderTrack] = []
+        collected: list[ProviderTrack] = []
 
         try:
             with yt_dlp.YoutubeDL(self._ydl_opts()) as ydl:
@@ -80,25 +93,31 @@ class YouTubeProvider(MusicProvider):
                 for entry in entries:
                     if not entry:
                         continue
-                    track = self._entry_to_track(entry)
+                    track = self._entry_to_track(entry, songs_only=songs_only)
                     if track:
-                        raw.append(track)
+                        collected.append(track)
         except Exception as e:
             logger.error("youtube_search_failed", error=str(e), query=query)
 
-        return filter_song_tracks(raw, limit)
+        if songs_only:
+            return filter_song_tracks(collected, limit)
+        return filter_any_video_tracks(collected, limit)
 
-    async def get_metadata(self, provider_track_id: str) -> ProviderTrack:
-        return await asyncio.to_thread(self._get_metadata_sync, provider_track_id)
+    async def get_metadata(
+        self, provider_track_id: str, *, songs_only: bool = True
+    ) -> ProviderTrack:
+        return await asyncio.to_thread(self._get_metadata_sync, provider_track_id, songs_only)
 
-    def _get_metadata_sync(self, provider_track_id: str) -> ProviderTrack:
+    def _get_metadata_sync(self, provider_track_id: str, songs_only: bool = True) -> ProviderTrack:
         url = f"https://www.youtube.com/watch?v={provider_track_id}"
 
         try:
             with yt_dlp.YoutubeDL(self._ydl_opts(extract_flat=False)) as ydl:
                 info = ydl.extract_info(url, download=False)
-                track = self._entry_to_track(info, full=True)
-                if track and not is_placeholder_youtube_title(track.title):
+                track = self._entry_to_track(info, full=True, songs_only=songs_only)
+                if track and (
+                    not songs_only or not is_placeholder_youtube_title(track.title)
+                ):
                     return track
         except Exception as e:
             logger.warning("youtube_metadata_full_failed", video_id=provider_track_id, error=str(e))
@@ -115,13 +134,16 @@ class YouTubeProvider(MusicProvider):
                 duration_seconds=None,
                 thumbnail_url=f"https://i.ytimg.com/vi/{provider_track_id}/hqdefault.jpg",
                 stream_url=url,
+                content_kind="video" if not songs_only else "song",
             )
 
         try:
             with yt_dlp.YoutubeDL(self._ydl_opts(extract_flat=True)) as ydl:
                 info = ydl.extract_info(url, download=False)
-                track = self._entry_to_track(info, full=True)
-                if track and not is_placeholder_youtube_title(track.title):
+                track = self._entry_to_track(info, full=True, songs_only=songs_only)
+                if track and (
+                    not songs_only or not is_placeholder_youtube_title(track.title)
+                ):
                     return track
         except Exception as e:
             logger.warning("youtube_metadata_flat_failed", video_id=provider_track_id, error=str(e))
@@ -140,9 +162,15 @@ class YouTubeProvider(MusicProvider):
             duration_seconds=None,
             thumbnail_url=f"https://i.ytimg.com/vi/{provider_track_id}/hqdefault.jpg",
             stream_url=url,
+            content_kind="video" if not songs_only else "song",
         )
 
-    def _entry_to_track(self, entry: dict, full: bool = False) -> ProviderTrack | None:
+    def _entry_to_track(
+        self,
+        entry: dict,
+        full: bool = False,
+        songs_only: bool = True,
+    ) -> ProviderTrack | None:
         video_id = entry.get("id")
         if not video_id:
             return None
@@ -151,16 +179,17 @@ class YouTubeProvider(MusicProvider):
         artist, song_title = _parse_duration(title)
         duration = entry.get("duration")
 
-        if full and not is_single_song_track(title, int(duration) if duration else None):
-            return None
-        if not full and not is_single_song_track(title, int(duration) if duration else None):
-            return None
+        if songs_only:
+            if full and not is_single_song_track(title, int(duration) if duration else None):
+                return None
+            if not full and not is_single_song_track(title, int(duration) if duration else None):
+                return None
 
         thumbnail = entry.get("thumbnail")
         if not thumbnail and entry.get("thumbnails"):
             thumbnail = entry["thumbnails"][-1].get("url")
 
-        display_title = song_title if full else title
+        display_title = song_title if full and songs_only else title
         release_year = None
         upload_date = entry.get("upload_date") or entry.get("release_date")
         if upload_date and len(str(upload_date)) >= 4:
@@ -186,4 +215,5 @@ class YouTubeProvider(MusicProvider):
             stream_url=f"https://www.youtube.com/watch?v={video_id}",
             popularity=float(entry.get("view_count") or 0) / 1_000_000,
             release_year=release_year,
+            content_kind="song" if songs_only else "video",
         )

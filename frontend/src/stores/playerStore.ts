@@ -412,7 +412,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   playNextInsert: async (track, explicit = false) => {
-    await api.playNextInQueue(track.provider, track.provider_track_id, explicit);
+    const audioOnly = track.content_kind === 'video';
+    await api.playNextInQueue(
+      track.provider,
+      track.provider_track_id,
+      explicit,
+      audioOnly,
+    );
     await get().syncQueue();
   },
 
@@ -499,8 +505,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       /* best-effort */
     }
 
+    const audioOnly = track.content_kind === 'video';
     try {
-      const item = await api.addToQueue(track.provider, track.provider_track_id, explicit, true);
+      const item = await api.addToQueue(
+        track.provider,
+        track.provider_track_id,
+        explicit,
+        true,
+        audioOnly,
+      );
       const queue = await api.syncQueue();
       const playing = { ...track, ...item, thumbnail_url: item.thumbnail_url || track.thumbnail_url };
       set({
@@ -517,7 +530,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   queueTrack: async (track, explicit = false) => {
-    await api.addToQueue(track.provider, track.provider_track_id, explicit, false);
+    const audioOnly = track.content_kind === 'video';
+    await api.addToQueue(
+      track.provider,
+      track.provider_track_id,
+      explicit,
+      false,
+      audioOnly,
+    );
     await get().syncQueue();
   },
 

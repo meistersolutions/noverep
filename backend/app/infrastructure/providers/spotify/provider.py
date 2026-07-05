@@ -22,14 +22,23 @@ class SpotifyProvider(MusicProvider):
     def _configured(self) -> bool:
         return bool(settings.spotify_client_id and settings.spotify_client_secret)
 
-    async def search(self, query: str, limit: int = 20, *, raw: bool = False) -> list[ProviderTrack]:
+    async def search(
+        self,
+        query: str,
+        limit: int = 20,
+        *,
+        raw: bool = False,
+        songs_only: bool = True,
+    ) -> list[ProviderTrack]:
         if not self._configured():
             logger.warning("spotify_not_configured")
             return []
         # TODO: Implement Spotify search API
         raise NotImplementedError("Spotify integration pending – configure credentials")
 
-    async def get_metadata(self, provider_track_id: str) -> ProviderTrack:
+    async def get_metadata(
+        self, provider_track_id: str, *, songs_only: bool = True
+    ) -> ProviderTrack:
         if not self._configured():
             raise RuntimeError("Spotify not configured")
         raise NotImplementedError("Spotify integration pending")

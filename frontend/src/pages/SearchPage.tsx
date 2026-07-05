@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Loader2, Search, X } from 'lucide-react';
+import { Loader2, Search, Video, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api, Track } from '@/lib/api';
 import { SongCard, SongCardSkeleton } from '@/components/SongCard';
@@ -8,11 +8,16 @@ import { MobileHeader } from '@/components/MobileHeader';
 import { DiscoverModeToggle, useDiscoverOnly } from '@/components/DiscoverModeToggle';
 import { usePlayerStore } from '@/stores/playerStore';
 
+const ANY_VIDEO_KEY = 'noverep_search_any_video';
+
 export default function SearchPage() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Track[]>([]);
   const [searching, setSearching] = useState(false);
+  const [anyVideo, setAnyVideo] = useState(
+    () => localStorage.getItem(ANY_VIDEO_KEY) === 'true',
+  );
   const playTrack = usePlayerStore((s) => s.playTrack);
   const queueTrack = usePlayerStore((s) => s.queueTrack);
   const playNextInsert = usePlayerStore((s) => s.playNextInsert);
@@ -20,13 +25,22 @@ export default function SearchPage() {
   const discoverOnly = useDiscoverOnly();
   const includeHeard = !discoverOnly;
 
+  const toggleAnyVideo = () => {
+    setAnyVideo((prev) => {
+      const next = !prev;
+      localStorage.setItem(ANY_VIDEO_KEY, String(next));
+      return next;
+    });
+    setResults([]);
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const q = query.trim();
     if (!q) return;
     setSearching(true);
     try {
-      const res = await api.search(q, 'youtube', includeHeard, true, true);
+      const res = await api.search(q, 'youtube', includeHeard, true, true, anyVideo);
       setResults(res.results);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Search failed');
@@ -77,6 +91,23 @@ export default function SearchPage() {
         <DiscoverModeToggle />
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={anyVideo}
+          onClick={toggleAnyVideo}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors border ${
+            anyVideo
+              ? 'bg-accent/20 border-accent/40 text-accent-hover'
+              : 'bg-white/5 border-white/10 text-white/70 hover:text-white'
+          }`}
+        >
+          <Video className="w-4 h-4 shrink-0" />
+          <span>Any YouTube video (audio only)</span>
+        </button>
+      </div>
+
       <form onSubmit={handleSearch} className="flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40 pointer-events-none" />
@@ -85,7 +116,7 @@ export default function SearchPage() {
             enterKeyHint="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search songs, artists…"
+            placeholder={anyVideo ? 'Search any YouTube video…' : 'Search songs, artists…'}
             className="w-full glass pl-12 pr-10 py-3.5 text-base focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
           {query && (
@@ -113,12 +144,15 @@ export default function SearchPage() {
       </form>
 
       <p className="text-xs text-white/40">
-        Searches exactly what you type — single songs only (no playlists or concerts). Your language
-        and discovery preferences apply on the{' '}
-        <Link to="/queue" className="text-accent hover:underline">
-          Queue
-        </Link>{' '}
-        page.
+        {anyVideo
+          ? 'Searches all YouTube videos and plays audio in the background — podcasts, talks, lectures, and more.'
+          : 'Single songs only (no playlists or concerts). Language and discovery preferences apply on the'}{' '}
+        {!anyVideo && (
+          <Link to="/queue" className="text-accent hover:underline">
+            Queue
+          </Link>
+        )}
+        {!anyVideo && ' page.'}
       </p>
 
       {results.length > 0 || searching ? (
@@ -137,7 +171,9 @@ export default function SearchPage() {
                 />
               ))}
             {!searching && results.length === 0 && query && (
-              <p className="text-white/50 text-center py-8">No songs found. Try another search.</p>
+              <p className="text-white/50 text-center py-8">
+                {anyVideo ? 'No videos found. Try another search.' : 'No songs found. Try another search.'}
+              </p>
             )}
           </div>
         </section>
