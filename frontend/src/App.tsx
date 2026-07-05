@@ -1,26 +1,37 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Sidebar } from '@/components/Sidebar';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { PlayerBar } from '@/components/PlayerBar';
-import { YouTubePlayer } from '@/components/YouTubePlayer';
 import { OnboardingModal } from '@/components/OnboardingModal';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import AuthPage from '@/pages/AuthPage';
-import HomePage from '@/pages/HomePage';
-import SearchPage from '@/pages/SearchPage';
 import QueuePage from '@/pages/QueuePage';
-import NowPlayingPage from '@/pages/NowPlayingPage';
-import HistoryPage from '@/pages/HistoryPage';
-import PlaylistsPage from '@/pages/PlaylistsPage';
-import SettingsPage from '@/pages/SettingsPage';
-import StatisticsPage from '@/pages/StatisticsPage';
-import FeedbackPage from '@/pages/FeedbackPage';
-import ProfilePage from '@/pages/ProfilePage';
-import AdminPage from '@/pages/AdminPage';
 import { api } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
+
+const HomePage = lazy(() => import('@/pages/HomePage'));
+const SearchPage = lazy(() => import('@/pages/SearchPage'));
+const NowPlayingPage = lazy(() => import('@/pages/NowPlayingPage'));
+const HistoryPage = lazy(() => import('@/pages/HistoryPage'));
+const PlaylistsPage = lazy(() => import('@/pages/PlaylistsPage'));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'));
+const FeedbackPage = lazy(() => import('@/pages/FeedbackPage'));
+const ProfilePage = lazy(() => import('@/pages/ProfilePage'));
+const AdminPage = lazy(() => import('@/pages/AdminPage'));
+const YouTubePlayer = lazy(() =>
+  import('@/components/YouTubePlayer').then((m) => ({ default: m.YouTubePlayer })),
+);
+
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <Loader2 className="w-6 h-6 animate-spin text-accent" />
+    </div>
+  );
+}
 
 function MainApp() {
   const init = usePlayerStore((s) => s.init);
@@ -34,8 +45,8 @@ function MainApp() {
   useKeyboardShortcuts();
 
   useEffect(() => {
-    if (token && !initialized) init();
-  }, [token, initialized, init]);
+    if (token) init();
+  }, [token, init]);
 
   useEffect(() => {
     if (initialized && preferences && !preferences.onboarding_completed) {
@@ -73,23 +84,27 @@ function MainApp() {
       )}
       <Sidebar />
       <main className="flex-1 p-4 md:p-6 overflow-auto w-full max-w-full">
-        <Routes>
-          <Route path="/" element={<QueuePage />} />
-          <Route path="/home" element={<HomePage />} />
-          <Route path="/queue" element={<QueuePage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/now-playing" element={<NowPlayingPage />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="/playlists" element={<PlaylistsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/feedback" element={<FeedbackPage />} />
-          <Route path="/statistics" element={<StatisticsPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/admin" element={<AdminPage />} />
-        </Routes>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<QueuePage />} />
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/queue" element={<QueuePage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/now-playing" element={<NowPlayingPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/playlists" element={<PlaylistsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/feedback" element={<FeedbackPage />} />
+            <Route path="/statistics" element={<StatisticsPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/admin" element={<AdminPage />} />
+          </Routes>
+        </Suspense>
       </main>
       <MobileBottomNav />
-      <YouTubePlayer />
+      <Suspense fallback={null}>
+        <YouTubePlayer />
+      </Suspense>
       <PlayerBar />
     </div>
   );

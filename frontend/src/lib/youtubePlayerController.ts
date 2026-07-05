@@ -54,8 +54,23 @@ function notifyActiveVideo(videoId: string) {
   onActiveVideoId?.(videoId);
 }
 
+let apiScriptRequested = false;
+
+function ensureYouTubeApiScript(): void {
+  if (apiScriptRequested || window.YT?.Player) return;
+  apiScriptRequested = true;
+  if (document.getElementById('youtube-iframe-api')) return;
+
+  const tag = document.createElement('script');
+  tag.id = 'youtube-iframe-api';
+  tag.src = 'https://www.youtube.com/iframe_api';
+  tag.async = true;
+  document.head.appendChild(tag);
+}
+
 export function waitForYouTubeApi(): Promise<void> {
   if (apiReady && window.YT?.Player) return Promise.resolve();
+  ensureYouTubeApiScript();
   return new Promise((resolve) => {
     if (window.YT?.Player) {
       apiReady = true;

@@ -3,6 +3,14 @@ import { api, QueueItem, Track, UserPreferences, QueueRefreshOptions } from '@/l
 import { isSameSong } from '@/lib/songMatcher';
 import { recordPlayProgress, recordPlayStart } from '@/lib/playbackHistory';
 import { setWantPlaying, prepareTrackTransition, getActiveVideoId, cueVideoForResume } from '@/lib/youtubePlayerController';
+import {
+  clearCachedPreferences,
+  readCachedPreferences,
+  writeCachedPreferences,
+} from '@/lib/preferencesCache';
+
+const cachedPreferences = readCachedPreferences();
+const hasStoredToken = !!localStorage.getItem('noverep_token');
 
 let advancingNext = false;
 
@@ -205,6 +213,7 @@ interface PlayerState {
   playNextInsert: (track: Track, explicit?: boolean) => Promise<void>;
   playPlaylist: (playlistId: string) => Promise<void>;
   playQueueItem: (item: QueueItem) => Promise<void>;
+  refreshQueueInBackground: () => Promise<void>;
   loadPreferences: () => Promise<void>;
   bumpHistory: () => void;
   recordCurrentPlayback: (skipped?: boolean) => Promise<void>;
@@ -221,17 +230,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   queue: [],
   isPlaying: false,
   volume: 0.8,
-  shuffle: false,
-  autoplay: true,
+  shuffle: cachedPreferences?.shuffle ?? false,
+  autoplay: cachedPreferences?.autoplay ?? true,
   currentTime: 0,
   duration: 0,
-  preferences: null,
-  initialized: false,
+  preferences: cachedPreferences,
+  initialized: hasStoredToken && !!cachedPreferences,
   historyVersion: 0,
   queueBuilding: false,
   isAdmin: false,
-  playbackMode: 'discovery',
-  activePlaylistId: null,
+  playbackMode: cachedPreferences?.playback_mode || 'discovery',
+  activePlaylistId: cachedPreferences?.active_playlist_id ?? null,
 
   setAuth: (token, username, isGuest) => {
     localStorage.setItem('noverep_token', token);
@@ -245,6 +254,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     localStorage.removeItem('noverep_username');
     localStorage.removeItem('noverep_guest');
     localStorage.removeItem('noverep_display_name');
+    clearCachedPreferences();
     set({
       token: null,
       username: null,
@@ -261,55 +271,90 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   init: async () => {
-    const { token, sessionId } = get();
+    const { token, sessionId, initialized } = get();
     if (!token) return;
+    if (initialized && get().preferences) {
+      void get().refreshQueueInBackground();
+      return;
+    }
 
     localStorage.setItem('noverep_session', sessionId);
-    await get().loadPreferences();
-    try {
-      const me = await api.getMe();
-      set({ isAdmin: me.is_admin });
-      localStorage.setItem('noverep_display_name', me.display_name);
-    } catch {
-      /* optional */
+
+    const cached = readCachedPreferences();
+    if (cached) {
+      set({
+        preferences: cached,
+        shuffle: cached.shuffle,
+        autoplay: cached.autoplay,
+        playbackMode: cached.playback_mode || 'discovery',
+        activePlaylistId: cached.active_playlist_id,
+      });
     }
 
     set({ initialized: true });
 
-    const buildQueue = async () => {
-      set({ queueBuilding: true });
-      try {
-        const playing = get().isPlaying && get().currentTrack;
-        if (get().playbackMode === 'playlist') {
-          if (!playing) await get().refreshQueue();
-          return;
-        }
+    void api.getMe().then((me) => {
+      set({ isAdmin: me.is_admin });
+      localStorage.setItem('noverep_display_name', me.display_name);
+    }).catch(() => {});
 
-        let queue = await api.syncQueue().catch(() => null);
-        if (!queue?.length) {
-          queue = await api.refreshQueueFromPreferences().catch(() => null);
+    void get().loadPreferences().catch(() => {});
+    void get().refreshQueueInBackground();
+  },
+
+  refreshQueueInBackground: async () => {
+    if (get().queueBuilding) return;
+    set({ queueBuilding: true });
+    try {
+      const playing = get().isPlaying && get().currentTrack;
+      if (get().playbackMode === 'playlist') {
+        if (!playing) await get().refreshQueue();
+        return;
+      }
+
+      try {
+        const existing = await api.getQueue();
+        if (existing?.length) {
+          const snapshot = applyQueueSnapshot(existing, get().currentTrack, playing);
+          set(snapshot);
+          void prefetchUpcoming(snapshot.queue);
+          if (existing.length >= 5) {
+            void api.syncQueue().then((queue) => {
+              if (!queue?.length) return;
+              const { currentTrack, isPlaying } = get();
+              set(applyQueueSnapshot(queue, currentTrack, isPlaying));
+              void prefetchUpcoming(get().queue);
+            }).catch(() => {});
+            return;
+          }
         }
+      } catch {
+        /* fall through to sync */
+      }
+
+      let queue = await api.syncQueue().catch(() => null);
+      if (!queue?.length) {
+        queue = await api.refreshQueueFromPreferences().catch(() => null);
+      }
+      if (queue?.length) {
+        const snapshot = applyQueueSnapshot(queue, get().currentTrack, playing);
+        set(snapshot);
+        void prefetchUpcoming(snapshot.queue);
+      }
+    } catch {
+      try {
+        const queue = await api.getQueue();
         if (queue?.length) {
-          const snapshot = applyQueueSnapshot(queue, get().currentTrack, playing);
+          const snapshot = applyQueueSnapshot(queue, get().currentTrack, false);
           set(snapshot);
           void prefetchUpcoming(snapshot.queue);
         }
       } catch {
-        try {
-          const queue = await api.getQueue();
-          if (queue?.length) {
-            const snapshot = applyQueueSnapshot(queue, get().currentTrack, false);
-            set(snapshot);
-            void prefetchUpcoming(snapshot.queue);
-          }
-        } catch {
-          /* best-effort */
-        }
-      } finally {
-        set({ queueBuilding: false });
+        /* best-effort */
       }
-    };
-    void buildQueue();
+    } finally {
+      set({ queueBuilding: false });
+    }
   },
 
   bumpHistory: () => set((s) => ({ historyVersion: s.historyVersion + 1 })),
@@ -666,6 +711,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   loadPreferences: async () => {
     const preferences = await api.getPreferences();
+    writeCachedPreferences(preferences);
     set({
       preferences,
       shuffle: preferences.shuffle,

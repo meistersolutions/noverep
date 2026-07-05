@@ -182,7 +182,7 @@ export const api = {
       throw err;
     }
   },
-  getQueue: () => request<QueueItem[]>('/queue'),
+  getQueue: () => request<QueueItem[]>('/queue', {}, 15_000),
   getTrackDetails: (
     provider: string,
     providerTrackId: string,

@@ -28,8 +28,8 @@ export default function AuthPage() {
   ) => {
     setAuth(res.access_token, res.username, res.is_guest);
     if (displayName) localStorage.setItem('noverep_display_name', displayName);
-    await init();
     navigate('/', { replace: true });
+    void init();
   };
 
   const handleLogin = async (e: React.FormEvent) => {
