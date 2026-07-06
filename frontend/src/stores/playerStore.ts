@@ -150,8 +150,28 @@ function applyQueueSnapshot(
   };
 }
 
-function reorderQueueToPlayNow(queue: QueueItem[], item: QueueItem): QueueItem[] {
-  const rest = queue.filter((q) => q.id !== item.id);
+function playQueueItemOptimistic(
+  queue: QueueItem[],
+  item: QueueItem,
+  currentTrack: QueueItem | Track | null,
+): QueueItem[] {
+  const current =
+    queue.find((q) => q.is_current) ??
+    (currentTrack && 'id' in currentTrack && currentTrack.id
+      ? queue.find((q) => q.id === currentTrack.id)
+      : currentTrack
+        ? queue.find((q) => q.provider_track_id === currentTrack.provider_track_id)
+        : undefined);
+
+  if (current?.id === item.id) {
+    return queue.map((q, i) => ({
+      ...q,
+      is_current: q.id === item.id,
+      position: i,
+    }));
+  }
+
+  const rest = queue.filter((q) => q.id !== item.id && q.id !== current?.id);
   return [
     { ...item, is_current: true, position: 0 },
     ...rest.map((q, i) => ({ ...q, is_current: false, position: i + 1 })),
@@ -507,7 +527,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
 
     try {
-      await recordPlayStart(track, get().sessionId);
+      await recordPlayStart(track, get().sessionId, explicit);
       get().bumpHistory();
     } catch {
       /* best-effort */
@@ -581,7 +601,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           queue: updatedQueue,
         });
         void beginPlayback(item, volume);
-        void recordPlayStart(item, sessionId).then(() => get().bumpHistory());
+        void recordPlayStart(item, sessionId, false).then(() => get().bumpHistory());
         void prefetchUpcoming(updatedQueue);
       };
 
@@ -596,6 +616,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             await get().refreshQueue();
           }
           void prefetchUpcoming(get().queue);
+          void get().refreshQueueInBackground();
         } catch {
           await get().refreshQueue();
         }
@@ -608,8 +629,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       prepareTrackTransition();
       set(applyServerQueueAfterSkip(serverQueue, item));
       void beginPlayback(item, volume);
-      void recordPlayStart(item, sessionId).then(() => get().bumpHistory());
+      void recordPlayStart(item, sessionId, false).then(() => get().bumpHistory());
       void prefetchUpcoming(get().queue);
+      void get().refreshQueueInBackground();
     } finally {
       advancingNext = false;
     }
@@ -635,7 +657,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       await loadAndPlay(item.provider_track_id, get().volume * 100);
 
       try {
-        await recordPlayStart(item, get().sessionId);
+        await recordPlayStart(item, get().sessionId, get().playbackMode === 'playlist');
         get().bumpHistory();
       } catch {
         /* best-effort */
@@ -665,7 +687,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     await loadAndPlay(current.provider_track_id, get().volume * 100);
 
     try {
-      await recordPlayStart(current, get().sessionId);
+      await recordPlayStart(current, get().sessionId, true);
       get().bumpHistory();
     } catch {
       /* best-effort */
@@ -676,9 +698,20 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (advancingNext) return;
     advancingNext = true;
     try {
+      const { queue, currentTrack, volume } = get();
+      const current =
+        queue.find((q) => q.is_current) ??
+        (currentTrack && 'id' in currentTrack && currentTrack.id
+          ? queue.find((q) => q.id === currentTrack.id)
+          : undefined);
+
+      if (current && current.id !== item.id) {
+        await get().recordCurrentPlayback(false);
+      }
+
       setWantPlaying(true);
       prepareTrackTransition();
-      const optimistic = reorderQueueToPlayNow(get().queue, item);
+      const optimistic = playQueueItemOptimistic(queue, item, currentTrack);
       set({
         currentTrack: item,
         queue: optimistic,
@@ -686,7 +719,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         currentTime: 0,
         duration: item.duration_seconds ?? 0,
       });
-      void beginPlayback(item, get().volume);
+      void beginPlayback(item, volume);
 
       const updated = await api.playQueueItem(item.id);
       const serverQueue = await api.getQueue();
@@ -696,7 +729,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       void prefetchUpcoming(get().queue);
 
       try {
-        await recordPlayStart(updated, get().sessionId);
+        await recordPlayStart(updated, get().sessionId, false);
         get().bumpHistory();
       } catch {
         /* best-effort */

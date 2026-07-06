@@ -233,6 +233,20 @@ class QueueService:
     async def _queue_song_ids(self, queue: list[QueueItemModel]) -> set[UUID]:
         return {q.song_id for q in queue}
 
+    def _skip_recommendation_candidate(
+        self,
+        candidate,
+        existing_tracks: set[str],
+        existing_songs: set[UUID],
+        blocked_songs: set[UUID],
+    ) -> bool:
+        if candidate.track.provider_track_id in existing_tracks:
+            return True
+        canonical_id = candidate.track.canonical_song_id
+        return bool(
+            canonical_id and (canonical_id in existing_songs or canonical_id in blocked_songs)
+        )
+
     async def _dedupe_queue(self, session: AsyncSession, queue: list[QueueItemModel]) -> list[QueueItemModel]:
         """Remove duplicate tracks/songs from queue, keeping the earliest row (and current)."""
         song_ids = {item.song_id for item in queue if item.song_id}
@@ -438,15 +452,13 @@ class QueueService:
 
             existing = await self._queue_track_ids(queue)
             existing_songs = await self._queue_song_ids(queue)
+            blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
             added_any = False
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
-                if candidate.track.provider_track_id in existing:
-                    continue
-                if (
-                    candidate.track.canonical_song_id
-                    and candidate.track.canonical_song_id in existing_songs
+                if self._skip_recommendation_candidate(
+                    candidate, existing, existing_songs, blocked_songs
                 ):
                     continue
                 try:
@@ -531,15 +543,13 @@ class QueueService:
 
             existing = await self._queue_track_ids(queue)
             existing_songs = await self._queue_song_ids(queue)
+            blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
             added_any = False
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
-                if candidate.track.provider_track_id in existing:
-                    continue
-                if (
-                    candidate.track.canonical_song_id
-                    and candidate.track.canonical_song_id in existing_songs
+                if self._skip_recommendation_candidate(
+                    candidate, existing, existing_songs, blocked_songs
                 ):
                     continue
                 try:
@@ -596,14 +606,12 @@ class QueueService:
             )
             existing = await self._queue_track_ids(queue)
             existing_songs = await self._queue_song_ids(queue)
+            blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
-                if candidate.track.provider_track_id in existing:
-                    continue
-                if (
-                    candidate.track.canonical_song_id
-                    and candidate.track.canonical_song_id in existing_songs
+                if self._skip_recommendation_candidate(
+                    candidate, existing, existing_songs, blocked_songs
                 ):
                     continue
                 try:
@@ -832,7 +840,16 @@ class QueueService:
             return None
         target = queue[target_idx]
 
-        reordered = [target] + [q for q in queue if q.id != item_id]
+        current = next((q for q in queue if q.is_current), None)
+        if current and current.id != target.id:
+            await session.delete(current)
+            await session.flush()
+            queue = await self.get_queue(session, user_id)
+            target = next((q for q in queue if q.id == item_id), None)
+            if not target:
+                return None
+
+        reordered = [target] + [q for q in queue if q.id != target.id]
         for i, q in enumerate(reordered):
             q.position = i
             q.is_current = i == 0

@@ -3,6 +3,7 @@ import { api, Track } from '@/lib/api';
 export async function recordPlayStart(
   track: Track,
   sessionId: string,
+  explicitlyRequested = false,
 ): Promise<void> {
   await api.recordPlayback({
     provider: track.provider,
@@ -14,7 +15,7 @@ export async function recordPlayStart(
     completion_pct: 0,
     skipped: false,
     session_id: sessionId,
-    explicitly_requested: true,
+    explicitly_requested: explicitlyRequested,
   });
 }
 
@@ -36,6 +37,6 @@ export async function recordPlayProgress(
     completion_pct: pct,
     skipped,
     session_id: sessionId,
-    explicitly_requested: !skipped,
+    explicitly_requested: false,
   });
 }
