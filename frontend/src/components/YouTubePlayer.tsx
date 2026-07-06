@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { usePlayerStore } from '@/stores/playerStore';
-import { needsOffscreenPlayer } from '@/lib/nativePlatform';
 import {
   getPlayer,
   handlePlayerStateChange,
@@ -18,23 +17,13 @@ import { initBackgroundPlayback, onPlaybackStateChange } from '@/lib/backgroundP
 
 const CONTAINER_ID = 'noverep-yt-player';
 
-let globalPlayerCreated = false;
-
-const OFFSCREEN_PLAYER_STYLE: React.CSSProperties = {
+/** Real iframe dimensions off-screen — required for reliable playback on mobile and desktop Chrome. */
+const PLAYER_CONTAINER_STYLE: React.CSSProperties = {
   width: 320,
   height: 180,
   opacity: 0.01,
   left: -9999,
   top: 0,
-  zIndex: 0,
-};
-
-const DESKTOP_PLAYER_STYLE: React.CSSProperties = {
-  width: 1,
-  height: 1,
-  opacity: 0.01,
-  left: 0,
-  bottom: 0,
   zIndex: 0,
 };
 
@@ -63,17 +52,15 @@ export function YouTubePlayer() {
   }, []);
 
   useEffect(() => {
-    if (globalPlayerCreated) return;
-    globalPlayerCreated = true;
+    let cancelled = false;
 
     const init = async () => {
       await waitForYouTubeApi();
-      if (!window.YT?.Player || getPlayer()) return;
+      if (cancelled || !window.YT?.Player || getPlayer()) return;
 
-      const useOffscreen = needsOffscreenPlayer();
       const instance = new window.YT.Player(CONTAINER_ID, {
-        height: useOffscreen ? '180' : '200',
-        width: useOffscreen ? '320' : '200',
+        height: '180',
+        width: '320',
         playerVars: {
           autoplay: 0,
           controls: 0,
@@ -85,7 +72,9 @@ export function YouTubePlayer() {
           origin: window.location.origin,
         },
         events: {
-          onReady: () => setPlayerInstance(instance as never),
+          onReady: () => {
+            if (!cancelled) setPlayerInstance(instance as never);
+          },
           onStateChange: (e: { data: number; target: YTPlayerInstance }) => {
             handlePlayerStateChange(e.data, e.target as never);
           },
@@ -94,6 +83,9 @@ export function YouTubePlayer() {
     };
 
     void init();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -164,7 +156,7 @@ export function YouTubePlayer() {
     <div
       aria-hidden
       className="pointer-events-none fixed overflow-hidden"
-      style={needsOffscreenPlayer() ? OFFSCREEN_PLAYER_STYLE : DESKTOP_PLAYER_STYLE}
+      style={PLAYER_CONTAINER_STYLE}
     >
       <div id={CONTAINER_ID} />
     </div>

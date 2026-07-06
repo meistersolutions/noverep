@@ -59,10 +59,13 @@ function notifyActiveVideo(videoId: string) {
 let apiScriptRequested = false;
 
 export function ensureYouTubeApiScript(): void {
-  if (apiScriptRequested || window.YT?.Player) return;
-  apiScriptRequested = true;
+  if (window.YT?.Player) {
+    apiReady = true;
+    return;
+  }
   if (document.getElementById('youtube-iframe-api')) return;
 
+  apiScriptRequested = true;
   const tag = document.createElement('script');
   tag.id = 'youtube-iframe-api';
   tag.src = 'https://www.youtube.com/iframe_api';
@@ -89,11 +92,14 @@ export function waitForYouTubeApi(): Promise<void> {
   if (apiReady && window.YT?.Player) return Promise.resolve();
   ensureYouTubeApiScript();
   return new Promise((resolve) => {
-    if (window.YT?.Player) {
+    const settle = () => {
+      if (!window.YT?.Player) return false;
       apiReady = true;
       resolve();
-      return;
-    }
+      return true;
+    };
+    if (settle()) return;
+
     const prev = window.onYouTubeIframeAPIReady;
     window.onYouTubeIframeAPIReady = () => {
       apiReady = true;
@@ -101,6 +107,22 @@ export function waitForYouTubeApi(): Promise<void> {
       notify(apiWaiters);
     };
     apiWaiters.push(resolve);
+
+    // API may load before our callback is assigned (common on fast desktop networks).
+    if (settle()) {
+      notify(apiWaiters);
+      return;
+    }
+
+    const started = Date.now();
+    const poll = window.setInterval(() => {
+      if (settle()) {
+        clearInterval(poll);
+        notify(apiWaiters);
+      } else if (Date.now() - started > 30000) {
+        clearInterval(poll);
+      }
+    }, 100);
   });
 }
 

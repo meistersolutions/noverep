@@ -502,12 +502,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       activePlaylistId: null,
     });
 
-    try {
-      await loadAndPlay(track.provider_track_id, get().volume * 100);
-    } catch {
+    void loadAndPlay(track.provider_track_id, get().volume * 100).catch(() => {
       set({ isPlaying: false });
-      throw new Error('Could not start playback — try again');
-    }
+    });
 
     try {
       await recordPlayStart(track, get().sessionId);
