@@ -17,9 +17,24 @@ interface HistoryEntry {
 
 export default function HistoryPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [exporting, setExporting] = useState(false);
   const historyVersion = usePlayerStore((s) => s.historyVersion);
 
   const load = () => api.getHistory().then(setHistory);
+  const exportCsv = async () => {
+    try {
+      setExporting(true);
+      const blob = await api.exportHistoryCsv();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'listening-history.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -29,9 +44,18 @@ export default function HistoryPage() {
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">Listening History</h2>
-        <button className="btn-ghost text-sm" onClick={load}>
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button className="btn-ghost text-sm" onClick={load}>
+            Refresh
+          </button>
+          <button
+            className="btn-primary text-sm"
+            onClick={exportCsv}
+            disabled={exporting}
+          >
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
+        </div>
       </div>
       <p className="text-white/50 text-sm">
         Every play is recorded to enforce your never-repeat memory window.

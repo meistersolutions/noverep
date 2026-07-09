@@ -1,7 +1,10 @@
+import csv
+from io import StringIO
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -809,6 +812,43 @@ async def get_history(
             )
         )
     return entries
+
+
+@router.get("/history/export.csv")
+async def export_history_csv(
+    user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    result = await session.execute(
+        select(
+            ListeningHistoryModel.played_at,
+            SongModel.title,
+            SongModel.enrichment_metadata,
+        )
+        .join(SongModel, ListeningHistoryModel.song_id == SongModel.id)
+        .where(ListeningHistoryModel.user_id == user.id)
+        .order_by(ListeningHistoryModel.played_at.desc())
+    )
+    rows = result.all()
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Song Name", "Movie Name", "Composer", "Singers"])
+
+    for played_at, song_title, enrichment_metadata in rows:
+        metadata = enrichment_metadata or {}
+        song_name = (metadata.get("song_name") or song_title or "").strip()
+        movie_name = (metadata.get("movie_name") or "").strip()
+        composed_by = ", ".join(metadata.get("composed_by") or [])
+        singers = ", ".join(metadata.get("performed_by") or [])
+        writer.writerow([song_name, movie_name, composed_by, singers])
+
+    filename = f"history-{user.username}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/preferences", response_model=UserPreferencesResponse)

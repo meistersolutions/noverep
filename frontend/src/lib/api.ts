@@ -314,6 +314,17 @@ export const api = {
         skipped: boolean;
       }[]
     >('/history'),
+  exportHistoryCsv: async () => {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API_URL}/history/export.csv`, { headers });
+    if (!res.ok) {
+      const err = await res.text().catch(() => 'Failed to export history');
+      throw new Error(err || 'Failed to export history');
+    }
+    return res.blob();
+  },
   getPreferences: () => request<UserPreferences>('/preferences'),
   updatePreferences: (data: Partial<UserPreferences>) =>
     request<UserPreferences>('/preferences', {
