@@ -342,24 +342,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return;
       }
 
+      // Fast path: show server queue immediately, then reconcile with cross-device history.
       try {
         const existing = await api.getQueue();
         if (existing?.length) {
           const snapshot = applyQueueSnapshot(existing, get().currentTrack, playing);
           set(snapshot);
           void prefetchUpcoming(snapshot.queue);
-          if (existing.length >= 5) {
-            void api.syncQueue().then((queue) => {
-              if (!queue?.length) return;
-              const { currentTrack, isPlaying } = get();
-              set(applyQueueSnapshot(queue, currentTrack, isPlaying));
-              void prefetchUpcoming(get().queue);
-            }).catch(() => {});
-            return;
-          }
         }
       } catch {
-        /* fall through to sync */
+        /* continue to reconcile */
       }
 
       let queue = await api.syncQueue().catch(() => null);

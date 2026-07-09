@@ -12,7 +12,7 @@ from app.application.services.language_utils import (
     random_lang_discovery_query,
     resolve_languages_from_prefs,
 )
-from app.application.services.memory_service import MemoryService
+from app.application.services.memory_service import HeardSongSnapshot, MemoryService
 from app.application.services.recommendation_engine import RecommendationEngine
 from app.application.services.song_matcher import is_same_song
 from app.application.services.song_normalizer import SongNormalizer
@@ -247,6 +247,66 @@ class QueueService:
             canonical_id and (canonical_id in existing_songs or canonical_id in blocked_songs)
         )
 
+    def _is_heard_queue_item(
+        self,
+        item: QueueItemModel,
+        blocked_song_ids: set[UUID],
+        heard_snapshots: list[HeardSongSnapshot],
+    ) -> bool:
+        if item.song_id and item.song_id in blocked_song_ids:
+            return True
+        return any(
+            is_same_song(
+                item.title,
+                item.artist,
+                item.duration_seconds,
+                heard.title,
+                heard.artist,
+                heard.duration_seconds,
+            )
+            for heard in heard_snapshots
+        )
+
+    async def _purge_heard_from_queue(
+        self, session: AsyncSession, user_id: UUID
+    ) -> list[QueueItemModel]:
+        """Remove upcoming queue items already heard on any device (memory window)."""
+        if await self._is_playlist_mode(session, user_id):
+            return await self.get_queue(session, user_id)
+
+        queue = await self.get_queue(session, user_id)
+        if not queue:
+            return queue
+
+        blocked_song_ids = await self.memory.get_blocked_song_ids(session, user_id)
+        heard_snapshots = await self.memory.get_heard_song_snapshots(session, user_id)
+        if not blocked_song_ids and not heard_snapshots:
+            return queue
+
+        removed = 0
+        for item in queue:
+            if item.is_current:
+                continue
+            if not self._is_heard_queue_item(item, blocked_song_ids, heard_snapshots):
+                continue
+            await session.delete(item)
+            removed += 1
+
+        if not removed:
+            return queue
+
+        await session.flush()
+        queue = await self.get_queue(session, user_id)
+        if queue and not any(q.is_current for q in queue):
+            for i, q in enumerate(queue):
+                q.position = i
+                q.is_current = i == 0
+            await session.flush()
+            queue = await self.get_queue(session, user_id)
+
+        logger.info("queue_purged_heard", user_id=str(user_id), removed=removed)
+        return queue
+
     async def _dedupe_queue(self, session: AsyncSession, queue: list[QueueItemModel]) -> list[QueueItemModel]:
         """Remove duplicate tracks/songs from queue, keeping the earliest row (and current)."""
         song_ids = {item.song_id for item in queue if item.song_id}
@@ -402,7 +462,7 @@ class QueueService:
         target_size: int = TARGET_QUEUE_SIZE,
     ) -> list[QueueItemModel]:
 
-        queue = await self.get_queue(session, user_id)
+        queue = await self._purge_heard_from_queue(session, user_id)
 
         if not queue:
             return await self._fill_empty_queue(session, user_id, target_size)

@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.application.services.memory_service import HeardSongSnapshot
 from app.application.services.queue_service import QueueService
+from app.infrastructure.database.models import QueueItemModel
 
 
 def _candidate(provider_track_id: str, canonical_song_id=None):
@@ -44,3 +46,56 @@ class TestSkipRecommendationCandidate:
         assert not self.svc._skip_recommendation_candidate(
             _candidate("vid-4", song_id), set(), set(), set()
         )
+
+
+class TestHeardQueueItem:
+    def setup_method(self):
+        self.svc = QueueService(
+            recommendation_engine=SimpleNamespace(),
+            memory_service=SimpleNamespace(),
+            normalizer=SimpleNamespace(),
+        )
+        self.song_id = uuid4()
+        self.item = QueueItemModel(
+            user_id=uuid4(),
+            song_id=self.song_id,
+            provider="youtube",
+            provider_track_id="vid-heard",
+            title="Kalaimane",
+            artist="Hariharan",
+            position=1,
+            is_current=False,
+        )
+
+    def test_matches_blocked_song_id(self):
+        heard = [
+            HeardSongSnapshot(
+                song_id=self.song_id,
+                title="Other Title",
+                artist="Other Artist",
+                duration_seconds=200,
+            )
+        ]
+        assert self.svc._is_heard_queue_item(self.item, {self.song_id}, heard)
+
+    def test_matches_semantic_history_entry(self):
+        heard = [
+            HeardSongSnapshot(
+                song_id=uuid4(),
+                title="Kalaimane",
+                artist="Hariharan",
+                duration_seconds=200,
+            )
+        ]
+        assert self.svc._is_heard_queue_item(self.item, set(), heard)
+
+    def test_allows_unheard_song(self):
+        heard = [
+            HeardSongSnapshot(
+                song_id=uuid4(),
+                title="Different Song",
+                artist="Different Artist",
+                duration_seconds=200,
+            )
+        ]
+        assert not self.svc._is_heard_queue_item(self.item, set(), heard)

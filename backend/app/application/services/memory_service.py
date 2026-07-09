@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -5,7 +6,19 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import MEMORY_WINDOW_DAYS, MemoryWindow
-from app.infrastructure.database.models import ListeningHistoryModel, UserPreferencesModel
+from app.infrastructure.database.models import (
+    ListeningHistoryModel,
+    SongModel,
+    UserPreferencesModel,
+)
+
+
+@dataclass(frozen=True)
+class HeardSongSnapshot:
+    song_id: UUID
+    title: str
+    artist: str
+    duration_seconds: int | None
 
 
 class MemoryService:
@@ -82,6 +95,57 @@ class MemoryService:
 
         rows = await session.execute(query.distinct())
         return {row[0] for row in rows.all()}
+
+    async def _history_cutoff(
+        self, session: AsyncSession, user_id: UUID
+    ) -> datetime | None:
+        """Return played_at cutoff, or None when repeat is disabled (no filtering)."""
+        result = await session.execute(
+            select(UserPreferencesModel).where(UserPreferencesModel.user_id == user_id)
+        )
+        prefs = result.scalar_one_or_none()
+        if prefs and prefs.repeat_disabled:
+            return None
+
+        window = await self.get_memory_window(session, user_id)
+        days = MEMORY_WINDOW_DAYS[window]
+        if days is None:
+            return datetime(1970, 1, 1, tzinfo=UTC)
+        return datetime.now(UTC) - timedelta(days=days)
+
+    async def get_heard_song_snapshots(
+        self, session: AsyncSession, user_id: UUID
+    ) -> list[HeardSongSnapshot]:
+        """Heard songs within the user's memory window (cross-device history)."""
+        cutoff = await self._history_cutoff(session, user_id)
+        if cutoff is None:
+            return []
+
+        query = (
+            select(
+                ListeningHistoryModel.song_id,
+                SongModel.title,
+                ListeningHistoryModel.artist_name,
+                SongModel.duration_seconds,
+            )
+            .join(SongModel, ListeningHistoryModel.song_id == SongModel.id)
+            .where(
+                ListeningHistoryModel.user_id == user_id,
+                ListeningHistoryModel.explicitly_requested.is_(False),
+                ListeningHistoryModel.played_at >= cutoff,
+            )
+            .distinct()
+        )
+        rows = await session.execute(query)
+        return [
+            HeardSongSnapshot(
+                song_id=row[0],
+                title=row[1],
+                artist=row[2],
+                duration_seconds=row[3],
+            )
+            for row in rows.all()
+        ]
 
     async def record_play(
         self,
