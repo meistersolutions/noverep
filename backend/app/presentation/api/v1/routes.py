@@ -1,4 +1,5 @@
 import csv
+from datetime import UTC
 from io import StringIO
 from uuid import UUID
 
@@ -29,6 +30,8 @@ from app.application.dto.schemas import (
     PlaylistTrackResponse,
     QueueItemResponse,
     RegisterRequest,
+    RemoveQueueItemRequest,
+    RemoveQueueItemResponse,
     SearchResponse,
     SongDetailsResponse,
     StatisticsResponse,
@@ -571,6 +574,57 @@ async def play_queue_item(
     return _queue_item_response(item)
 
 
+@router.post("/queue/{item_id}/remove", response_model=RemoveQueueItemResponse)
+async def remove_queue_item(
+    item_id: UUID,
+    body: RemoveQueueItemRequest,
+    user: UserModel = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    queue_svc: QueueService = Depends(get_queue_service),
+    memory: MemoryService = Depends(get_memory_service),
+):
+    queue = await queue_svc.get_queue(session, user.id)
+    target = next((q for q in queue if q.id == item_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+
+    sess_result = await session.execute(
+        select(SessionModel).where(SessionModel.id == body.session_id)
+    )
+    if not sess_result.scalar_one_or_none():
+        session.add(
+            SessionModel(id=body.session_id, user_id=user.id, device_id=None)
+        )
+        await session.flush()
+
+    if target.song_id:
+        await memory.record_play(
+            session,
+            user_id=user.id,
+            song_id=target.song_id,
+            provider=target.provider,
+            artist=target.artist,
+            album=target.album,
+            genre=None,
+            session_id=body.session_id,
+            duration_listened=body.duration_listened,
+            completion_pct=body.completion_pct,
+            skipped=True,
+            device_id=None,
+            explicitly_requested=False,
+        )
+
+    result = await queue_svc.remove_queue_item(session, user.id, item_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+
+    return RemoveQueueItemResponse(
+        was_current=result.was_current,
+        next_item=_queue_item_response(result.next_item) if result.next_item else None,
+        queue=[_queue_item_response(i) for i in result.queue],
+    )
+
+
 @router.post("/queue/play-next", response_model=QueueItemResponse)
 async def play_next_in_queue(
     body: AddToQueueRequest,
@@ -833,7 +887,7 @@ async def export_history_csv(
 
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Song Name", "Movie Name", "Composer", "Singers"])
+    writer.writerow(["Date", "Time", "Song Name", "Movie Name", "Composer", "Singers"])
 
     for played_at, song_title, enrichment_metadata in rows:
         metadata = enrichment_metadata or {}
@@ -841,7 +895,14 @@ async def export_history_csv(
         movie_name = (metadata.get("movie_name") or "").strip()
         composed_by = ", ".join(metadata.get("composed_by") or [])
         singers = ", ".join(metadata.get("performed_by") or [])
-        writer.writerow([song_name, movie_name, composed_by, singers])
+        if played_at:
+            dt = played_at.astimezone(UTC) if played_at.tzinfo else played_at.replace(tzinfo=UTC)
+            date_str = dt.strftime("%Y-%m-%d")
+            time_str = dt.strftime("%H:%M:%S")
+        else:
+            date_str = ""
+            time_str = ""
+        writer.writerow([date_str, time_str, song_name, movie_name, composed_by, singers])
 
     filename = f"history-{user.username}.csv"
     return StreamingResponse(

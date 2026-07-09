@@ -95,6 +95,18 @@ class AddToQueueRequest(BaseModel):
     audio_only: bool = False
 
 
+class RemoveQueueItemRequest(BaseModel):
+    session_id: UUID
+    duration_listened: int = 0
+    completion_pct: float = 0.0
+
+
+class RemoveQueueItemResponse(BaseModel):
+    was_current: bool
+    next_item: QueueItemResponse | None
+    queue: list[QueueItemResponse]
+
+
 class PlayEventRequest(BaseModel):
     provider: str
     provider_track_id: str

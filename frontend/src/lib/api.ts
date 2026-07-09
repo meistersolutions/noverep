@@ -299,6 +299,24 @@ export const api = {
     }),
   playQueueItem: (itemId: string) =>
     request<QueueItem>(`/queue/play/${itemId}`, { method: 'POST' }),
+  removeQueueItem: (
+    itemId: string,
+    sessionId: string,
+    durationListened = 0,
+    completionPct = 0,
+  ) =>
+    request<{
+      was_current: boolean;
+      next_item: QueueItem | null;
+      queue: QueueItem[];
+    }>(`/queue/${itemId}/remove`, {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: sessionId,
+        duration_listened: durationListened,
+        completion_pct: completionPct,
+      }),
+    }),
   getHistory: () =>
     request<
       {

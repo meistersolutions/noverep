@@ -241,6 +241,7 @@ interface PlayerState {
   playNextInsert: (track: Track, explicit?: boolean) => Promise<void>;
   playPlaylist: (playlistId: string) => Promise<void>;
   playQueueItem: (item: QueueItem) => Promise<void>;
+  removeFromQueue: (item: QueueItem) => Promise<void>;
   refreshQueueInBackground: () => Promise<void>;
   loadPreferences: () => Promise<void>;
   bumpHistory: () => void;
@@ -726,6 +727,63 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       } catch {
         /* best-effort */
       }
+    } finally {
+      advancingNext = false;
+    }
+  },
+
+  removeFromQueue: async (item) => {
+    if (advancingNext) return;
+    advancingNext = true;
+    try {
+      const { sessionId, currentTrack, currentTime, duration, volume, isPlaying } = get();
+      const isCurrent =
+        item.is_current ||
+        (currentTrack &&
+          ('id' in currentTrack && currentTrack.id
+            ? currentTrack.id === item.id
+            : currentTrack.provider_track_id === item.provider_track_id));
+
+      const trackDuration = isCurrent
+        ? duration
+        : item.duration_seconds ?? 0;
+      const listened = isCurrent ? currentTime : 0;
+      const completionPct =
+        trackDuration > 0 ? Math.min(100, (listened / trackDuration) * 100) : 0;
+
+      const result = await api.removeQueueItem(
+        item.id,
+        sessionId,
+        Math.floor(listened),
+        completionPct,
+      );
+      get().bumpHistory();
+
+      if (result.was_current) {
+        if (result.next_item) {
+          prepareTrackTransition();
+          set({
+            ...applyServerQueueAfterSkip(result.queue, result.next_item),
+          });
+          void beginPlayback(result.next_item, volume);
+          void recordPlayStart(result.next_item, sessionId, false).then(() =>
+            get().bumpHistory(),
+          );
+        } else {
+          set({
+            queue: result.queue,
+            currentTrack: null,
+            isPlaying: false,
+            currentTime: 0,
+            duration: 0,
+          });
+          pausePlayback();
+        }
+      } else {
+        set(applyQueueSnapshot(result.queue, get().currentTrack, isPlaying));
+      }
+
+      void prefetchUpcoming(get().queue);
     } finally {
       advancingNext = false;
     }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { RefreshCw, SkipForward, Play, ListPlus, ListMusic } from 'lucide-react';
+import { RefreshCw, SkipForward, Play, ListPlus, ListMusic, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatDuration, QueueItem } from '@/lib/api';
@@ -15,6 +15,7 @@ function QueueRow({
   onPlayNext,
   onAddToPlaylist,
   onSkipToNext,
+  onRemove,
   playlistMode,
 }: {
   item: QueueItem;
@@ -24,6 +25,7 @@ function QueueRow({
   onPlayNext: () => void;
   onAddToPlaylist: () => void;
   onSkipToNext?: () => void;
+  onRemove: () => void;
   playlistMode: boolean;
 }) {
   return (
@@ -44,6 +46,14 @@ function QueueRow({
         <p className="text-[10px] text-white/40 mt-0.5">{formatDuration(item.duration_seconds)}</p>
       </div>
       <div className="flex flex-col sm:flex-row gap-1 shrink-0">
+        <button
+          type="button"
+          className="btn-ghost text-xs px-2 py-1.5 text-red-300 hover:text-red-200"
+          onClick={onRemove}
+          title="Remove from queue"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
         <button
           type="button"
           className="btn-ghost text-xs px-2 py-1.5"
@@ -104,7 +114,7 @@ export function QueueSection({
   refreshing = false,
   showRefresh = true,
 }: QueueSectionProps) {
-  const { queue, refreshQueue, playQueueItem, currentTrack, next, playbackMode } =
+  const { queue, refreshQueue, playQueueItem, currentTrack, next, removeFromQueue, playbackMode } =
     usePlayerStore();
   const [playlistTrack, setPlaylistTrack] = useState<QueueItem | null>(null);
   const playlistMode = playbackMode === 'playlist';
@@ -146,6 +156,15 @@ export function QueueSection({
 
   const handleSkip = async () => {
     await next(true);
+  };
+
+  const handleRemove = async (item: QueueItem) => {
+    try {
+      await removeFromQueue(item);
+      toast.success(`Removed "${item.title}"`);
+    } catch {
+      toast.error('Could not remove song');
+    }
   };
 
   const handleRefresh = async () => {
@@ -204,6 +223,7 @@ export function QueueSection({
                   onPlayNext={() => {}}
                   onAddToPlaylist={() => setPlaylistTrack(nowPlaying as QueueItem)}
                   onSkipToNext={handleSkip}
+                  onRemove={() => handleRemove(nowPlaying as QueueItem)}
                 />
               </ol>
             </div>
@@ -227,6 +247,7 @@ export function QueueSection({
                     onPlayNow={() => handlePlayNow(item)}
                     onPlayNext={() => handlePlayNextInsert(item)}
                     onAddToPlaylist={() => setPlaylistTrack(item)}
+                    onRemove={() => handleRemove(item)}
                   />
                 ))}
               </ol>

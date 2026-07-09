@@ -1,9 +1,9 @@
+from dataclasses import dataclass
 from uuid import UUID
 
 import asyncio
 import random
 import structlog
-from dataclasses import dataclass
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,13 @@ class QueueRefreshFilters:
     year_from: int | None = None
     year_to: int | None = None
     skip_memory_filter: bool = False
+
+
+@dataclass
+class RemoveQueueResult:
+    was_current: bool
+    next_item: QueueItemModel | None
+    queue: list[QueueItemModel]
 
 
 class QueueService:
@@ -926,6 +933,68 @@ class QueueService:
                 q.is_current = True
                 return q
         return reordered[0] if reordered else None
+
+    async def remove_queue_item(
+        self, session: AsyncSession, user_id: UUID, item_id: UUID
+    ) -> RemoveQueueResult | None:
+        queue = await self.get_queue(session, user_id)
+        target = next((q for q in queue if q.id == item_id), None)
+        if not target:
+            return None
+
+        was_current = target.is_current
+        next_provider_id = None
+        if was_current and len(queue) > 1:
+            current_idx = next((i for i, q in enumerate(queue) if q.id == item_id), 0)
+            if current_idx + 1 < len(queue):
+                next_provider_id = queue[current_idx + 1].provider_track_id
+
+        await session.delete(target)
+        await session.flush()
+
+        queue = await self.get_queue(session, user_id)
+        next_item: QueueItemModel | None = None
+
+        if was_current and queue:
+            new_current_idx = 0
+            if next_provider_id:
+                for i, q in enumerate(queue):
+                    if q.provider_track_id == next_provider_id:
+                        new_current_idx = i
+                        break
+            for i, q in enumerate(queue):
+                q.position = i
+                q.is_current = i == new_current_idx
+            await session.flush()
+            next_item = queue[new_current_idx]
+        elif queue:
+            for i, q in enumerate(queue):
+                q.position = i
+            await session.flush()
+
+        if not await self._is_playlist_mode(session, user_id):
+            await self.sync_queue(session, user_id)
+            queue = await self.get_queue(session, user_id)
+            if was_current and next_item:
+                for q in queue:
+                    if q.provider_track_id == next_item.provider_track_id:
+                        for x in queue:
+                            x.is_current = False
+                        q.is_current = True
+                        next_item = q
+                        break
+
+        logger.info(
+            "queue_item_removed",
+            user_id=str(user_id),
+            item_id=str(item_id),
+            was_current=was_current,
+        )
+        return RemoveQueueResult(
+            was_current=was_current,
+            next_item=next_item,
+            queue=queue,
+        )
 
     async def load_playlist_queue(
         self,
