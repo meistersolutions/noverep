@@ -3,7 +3,12 @@ import { isAndroidNative } from '@/lib/nativePlatform';
 import { api } from '@/lib/api';
 
 interface BackgroundAudioPlugin {
-  playStream(options: { url: string; title?: string; artist?: string }): Promise<void>;
+  playStream(options: {
+    url: string;
+    title?: string;
+    artist?: string;
+    headers?: Record<string, string>;
+  }): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
   stop(): Promise<void>;
@@ -34,12 +39,24 @@ export async function playNativeAudio(options: {
 }): Promise<void> {
   if (!isAndroidNative()) return;
   const stream = await api.getAudioStream('youtube', options.videoId);
+  if (!stream?.url) {
+    throw new Error('No audio stream URL');
+  }
+  const lower = stream.url.toLowerCase();
+  if (
+    lower.includes('storyboard') ||
+    lower.includes('ytimg.com') ||
+    /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(lower)
+  ) {
+    throw new Error('Server returned a non-audio URL — redeploy API stream fix');
+  }
   activeVideoId = options.videoId;
   wantPlaying = true;
   await BackgroundAudio.playStream({
     url: stream.url,
     title: options.title || stream.title || 'NoRepeat',
     artist: options.artist || stream.artist || 'Playing',
+    headers: stream.http_headers || undefined,
   });
 }
 

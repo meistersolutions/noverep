@@ -12,6 +12,7 @@ import {
   warmUpPlayback,
   waitForYouTubeApi,
   syncNativePlaybackClock,
+  isUsingNativePlayer,
 } from '@/lib/youtubePlayerController';
 import { updateMediaSession, setupMediaSessionHandlers } from '@/lib/mediaSession';
 import { initBackgroundPlayback, onPlaybackStateChange } from '@/lib/backgroundPlayback';
@@ -143,10 +144,12 @@ export function YouTubePlayer() {
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      if (isAndroidNative()) {
+      // Native ExoPlayer clock
+      if (isAndroidNative() && isUsingNativePlayer()) {
         void syncNativePlaybackClock(setCurrentTime, setDuration);
         return;
       }
+      // YouTube iframe clock (web + Android fallback)
       const p = getPlayer();
       if (!p?.getCurrentTime) return;
       const t = p.getCurrentTime();
@@ -154,7 +157,7 @@ export function YouTubePlayer() {
       const d = p.getDuration();
       if (d && Number.isFinite(d) && d > 0) setDuration(d);
       syncFromPlayer();
-    }, 500);
+    }, 250);
     return () => clearInterval(id);
   }, [setCurrentTime, setDuration, syncFromPlayer]);
 

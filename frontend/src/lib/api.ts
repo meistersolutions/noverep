@@ -244,6 +244,7 @@ export const api = {
       duration_seconds: number | null;
       thumbnail_url: string | null;
       mime_type: string | null;
+      http_headers?: Record<string, string> | null;
     }>(
       `/tracks/audio-stream?provider=${encodeURIComponent(provider)}&provider_track_id=${encodeURIComponent(providerTrackId)}`,
       {},

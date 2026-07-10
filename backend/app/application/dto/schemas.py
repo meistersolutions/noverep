@@ -49,6 +49,7 @@ class AudioStreamResponse(BaseModel):
     duration_seconds: int | None = None
     thumbnail_url: str | None = None
     mime_type: str | None = None
+    http_headers: dict[str, str] | None = None
 
 
 class SearchResponse(BaseModel):

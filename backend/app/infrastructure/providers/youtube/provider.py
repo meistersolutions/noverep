@@ -41,6 +41,70 @@ def _parse_duration(title: str) -> tuple[str, str]:
     return artist, song_title
 
 
+def _is_playable_media_url(url: str | None) -> bool:
+    """Reject storyboards/thumbnails that yt-dlp sometimes exposes as format URLs."""
+    if not url or not isinstance(url, str):
+        return False
+    if not url.startswith("http"):
+        return False
+    lower = url.lower()
+    if "storyboard" in lower or "/sb/" in lower:
+        return False
+    if "ytimg.com" in lower:
+        return False
+    if any(ext in lower for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        return False
+    return True
+
+
+def _pick_audio_stream(info: dict[str, Any]) -> tuple[str, dict[str, str], str | None]:
+    """Pick a real audio (or AV) progressive URL suitable for ExoPlayer."""
+    formats = [f for f in (info.get("formats") or []) if isinstance(f, dict)]
+    candidates: list[tuple[int, str, dict[str, Any]]] = []
+
+    for fmt in formats:
+        url = fmt.get("url")
+        if not _is_playable_media_url(url):
+            continue
+        acodec = fmt.get("acodec")
+        if acodec in (None, "none"):
+            continue
+        # Skip DRM / manifest-only entries without a direct URL protocol we can play
+        protocol = (fmt.get("protocol") or "").lower()
+        if protocol in ("mhtml", "websocket"):
+            continue
+
+        vcodec = fmt.get("vcodec")
+        score = int(fmt.get("abr") or fmt.get("tbr") or 0)
+        if vcodec in (None, "none"):
+            score += 10_000  # prefer audio-only
+        ext = (fmt.get("ext") or "").lower()
+        if ext in ("m4a", "mp4", "webm", "opus"):
+            score += 100
+        if "googlevideo.com" in url.lower():
+            score += 50
+        candidates.append((score, url, fmt))
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        _score, url, fmt = candidates[0]
+        headers = fmt.get("http_headers") or info.get("http_headers") or {}
+        mime = fmt.get("ext") or fmt.get("acodec") or info.get("ext")
+        return url, {str(k): str(v) for k, v in dict(headers).items() if v is not None}, mime
+
+    # Fallback: top-level url only if it looks like real media
+    top = info.get("url")
+    if _is_playable_media_url(top):
+        headers = info.get("http_headers") or {}
+        return (
+            top,
+            {str(k): str(v) for k, v in dict(headers).items() if v is not None},
+            info.get("acodec") or info.get("ext"),
+        )
+
+    raise ValueError("No playable audio format found (YouTube returned no direct stream)")
+
+
 class YouTubeProvider(MusicProvider):
     """YouTube music provider – songs only by default; optional any-video search."""
 
@@ -63,6 +127,26 @@ class YouTubeProvider(MusicProvider):
             opts["format"] = "bestaudio/best"
             opts["ignore_no_formats_error"] = True
         return opts
+
+    def _audio_stream_ydl_opts(self) -> dict[str, Any]:
+        """Options tuned for resolving a direct ExoPlayer-compatible audio URL."""
+        return {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+            "socket_timeout": 30,
+            # Prefer clients that still expose progressive/audio URLs on servers.
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "web"],
+                }
+            },
+            "format": (
+                "bestaudio[ext=m4a]/bestaudio[acodec!=none][vcodec=none]/"
+                "bestaudio/best[acodec!=none]"
+            ),
+        }
 
     async def search(
         self,
@@ -114,38 +198,12 @@ class YouTubeProvider(MusicProvider):
 
     def _get_audio_stream_sync(self, provider_track_id: str) -> dict[str, Any]:
         url = f"https://www.youtube.com/watch?v={provider_track_id}"
-        opts = self._ydl_opts(extract_flat=False)
-        opts.update(
-            {
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
-                "noplaylist": True,
-            }
-        )
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(self._audio_stream_ydl_opts()) as ydl:
             info = ydl.extract_info(url, download=False)
             if not info:
                 raise ValueError("No stream info")
 
-            stream_url = info.get("url")
-            if not stream_url and info.get("formats"):
-                # Prefer audio-only progressive formats
-                audio_formats = [
-                    f
-                    for f in info["formats"]
-                    if f.get("url")
-                    and (f.get("vcodec") in (None, "none") or f.get("acodec") not in (None, "none"))
-                ]
-                audio_formats.sort(
-                    key=lambda f: (f.get("abr") or f.get("tbr") or 0),
-                    reverse=True,
-                )
-                if audio_formats:
-                    stream_url = audio_formats[0]["url"]
-                else:
-                    stream_url = info["formats"][-1].get("url")
-
-            if not stream_url:
-                raise ValueError("No audio URL in stream info")
+            stream_url, http_headers, mime = _pick_audio_stream(info)
 
             title = info.get("title") or f"YouTube {provider_track_id}"
             artist = (
@@ -167,7 +225,8 @@ class YouTubeProvider(MusicProvider):
                 "artist": artist,
                 "duration_seconds": int(duration) if duration else None,
                 "thumbnail_url": thumbnail,
-                "mime_type": info.get("acodec") or info.get("ext") or "audio/mp4",
+                "mime_type": mime or "audio/mp4",
+                "http_headers": http_headers or None,
             }
 
     def _get_metadata_sync(self, provider_track_id: str, songs_only: bool = True) -> ProviderTrack:

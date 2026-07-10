@@ -6,6 +6,7 @@ import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
 import { effectiveLanguages, languageLabels } from '@/lib/languages';
 import { MEMORY_WINDOWS } from '@/lib/preferenceOptions';
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
+import { formatAppVersion } from '@/lib/appVersion';
 
 const WEIGHT_LABELS: Record<string, string> = {
   artist_diversity: 'Artist Diversity',
@@ -65,8 +66,16 @@ export default function SettingsPage() {
   if (!prefs) return <div className="animate-pulse glass h-96" />;
 
   return (
-    <div className="space-y-8 max-w-2xl">
-      <h2 className="text-2xl font-bold">Settings</h2>
+    <div className="space-y-8 max-w-2xl pb-8">
+      <div className="flex items-end justify-between gap-3">
+        <h2 className="text-2xl font-bold">Settings</h2>
+        <p className="text-sm text-accent font-medium shrink-0">{formatAppVersion()}</p>
+      </div>
+
+      <div className="glass p-4 border border-accent/30 bg-accent/5">
+        <p className="text-xs uppercase tracking-wide text-white/50">Installed build</p>
+        <p className="text-base font-semibold mt-1">NoRepeat {formatAppVersion()}</p>
+      </div>
 
       <section className="glass p-6 space-y-4">
         <h3 className="font-semibold text-lg">Discovery Mode</h3>

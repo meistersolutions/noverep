@@ -15,6 +15,7 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { MobileHeader } from '@/components/MobileHeader';
 import { DiscoverModeToggle } from '@/components/DiscoverModeToggle';
 import { languageLabels } from '@/lib/languages';
+import { formatAppVersion } from '@/lib/appVersion';
 import toast from 'react-hot-toast';
 
 const menuLinks = [
@@ -48,8 +49,16 @@ export default function ProfilePage() {
   };
 
   return (
-    <div className="space-y-6 max-w-md">
+    <div className="space-y-6 max-w-md pb-8">
       <MobileHeader title="More" />
+
+      <div className="glass p-4 border border-accent/40 bg-accent/10">
+        <p className="text-xs uppercase tracking-wide text-accent/90 font-semibold">App version</p>
+        <p className="text-lg font-bold text-white mt-1">{formatAppVersion()}</p>
+        <p className="text-xs text-white/50 mt-1">
+          If this number is old after reinstall, the new build did not install.
+        </p>
+      </div>
 
       {user && (
         <div className="glass p-5 space-y-2">

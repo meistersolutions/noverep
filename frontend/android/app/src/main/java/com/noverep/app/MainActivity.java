@@ -45,6 +45,9 @@ public class MainActivity extends BridgeActivity {
                 case MediaPlaybackService.ACTION_JS_ENDED:
                     js = "window.dispatchEvent(new CustomEvent('noverep-media',{detail:{action:'ended'}}));";
                     break;
+                case MediaPlaybackService.ACTION_JS_ERROR:
+                    js = "window.dispatchEvent(new CustomEvent('noverep-media',{detail:{action:'error'}}));";
+                    break;
                 default:
                     return;
             }
@@ -129,6 +132,7 @@ public class MainActivity extends BridgeActivity {
         filter.addAction(MediaPlaybackService.ACTION_JS_NEXT);
         filter.addAction(MediaPlaybackService.ACTION_JS_PREV);
         filter.addAction(MediaPlaybackService.ACTION_JS_ENDED);
+        filter.addAction(MediaPlaybackService.ACTION_JS_ERROR);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(mediaActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {

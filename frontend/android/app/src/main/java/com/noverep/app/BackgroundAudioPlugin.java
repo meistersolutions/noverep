@@ -28,6 +28,11 @@ public class BackgroundAudioPlugin extends Plugin {
         intent.putExtra(MediaPlaybackService.EXTRA_TITLE, title);
         intent.putExtra(MediaPlaybackService.EXTRA_ARTIST, artist);
 
+        JSObject headers = call.getObject("headers");
+        if (headers != null) {
+            intent.putExtra(MediaPlaybackService.EXTRA_HEADERS_JSON, headers.toString());
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getContext().startForegroundService(intent);
         } else {

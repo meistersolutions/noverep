@@ -1,7 +1,7 @@
 {
   "name": "noverep-frontend",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.5.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,12 +10,13 @@
     "preview": "vite preview",
     "test": "vitest run",
     "lint": "eslint .",
-    "cap:sync": "npm run build:capacitor && npx cap sync && node scripts/patch-native-background.mjs",
+    "cap:sync": "node scripts/sync-app-version.mjs && npm run build:capacitor && npx cap sync && node scripts/patch-native-background.mjs",
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios",
     "cap:run:android": "npm run cap:sync && npx cap run android",
     "cap:apk": "npm run cap:sync && cd android && .\\gradlew.bat assembleDebug",
-    "cap:patch-native": "node scripts/patch-native-background.mjs"
+    "cap:patch-native": "node scripts/patch-native-background.mjs",
+    "version:sync": "node scripts/sync-app-version.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

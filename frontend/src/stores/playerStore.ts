@@ -18,7 +18,7 @@ import {
   readCachedPreferences,
   writeCachedPreferences,
 } from '@/lib/preferencesCache';
-
+import toast from 'react-hot-toast';
 const cachedPreferences = readCachedPreferences();
 const hasStoredToken = !!localStorage.getItem('noverep_token');
 
@@ -517,6 +517,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     void loadAndPlay(track.provider_track_id, get().volume * 100).catch(() => {
       set({ isPlaying: false });
+      toast.error('Could not start playback');
     });
 
     try {

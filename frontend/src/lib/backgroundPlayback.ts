@@ -1,10 +1,12 @@
-import { isAutoResumeAllowed, resumePlayback } from '@/lib/youtubePlayerController';
+import { isAutoResumeAllowed, isUsingNativePlayer, resumePlayback } from '@/lib/youtubePlayerController';
 import { isAndroidNative, isNativeApp } from '@/lib/nativePlatform';
 import {
+  pauseNativeAudio,
   stopNativeBackgroundAudio,
   syncNativeBackgroundAudio,
 } from '@/lib/nativeBackgroundAudio';
 import { usePlayerStore } from '@/stores/playerStore';
+import toast from 'react-hot-toast';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let wakeLock: WakeLockSentinel | null = null;
@@ -43,7 +45,15 @@ function startKeepAlive(getIsPlaying: () => boolean) {
   keepAliveTimer = setInterval(() => {
     const store = usePlayerStore.getState();
     const shouldPlay = getIsPlaying() || store.isPlaying;
-    if ((document.hidden || isAndroidNative()) && shouldPlay && isAutoResumeAllowed()) {
+    if (!shouldPlay || !isAutoResumeAllowed()) return;
+
+    // ExoPlayer runs in a foreground service — don't spam resume in foreground.
+    if (isUsingNativePlayer()) {
+      if (document.hidden) resumePlayback();
+      return;
+    }
+
+    if (document.hidden || isAndroidNative()) {
       resumePlayback();
     }
   }, KEEP_ALIVE_MS);
@@ -57,6 +67,7 @@ function stopKeepAlive() {
 }
 
 function ensureNativeServicePlaying() {
+  if (!isUsingNativePlayer()) return;
   const track = usePlayerStore.getState().currentTrack;
   void syncNativeBackgroundAudio({
     playing: true,
@@ -73,12 +84,15 @@ async function bindCapacitorAppState(getIsPlaying: () => boolean) {
     appStateListener = await App.addListener('appStateChange', ({ isActive }) => {
       if (isActive) {
         resumeIfPlaying(getIsPlaying);
-        // Keep service if still playing; don't stop keep-alive until foreground settles
         if (!getIsPlaying()) stopKeepAlive();
       } else if (getIsPlaying() || usePlayerStore.getState().isPlaying) {
-        resumePlayback();
-        startKeepAlive(getIsPlaying);
-        ensureNativeServicePlaying();
+        // ExoPlayer should keep going; only nudge resume + keep-alive for iframe fallback.
+        if (isUsingNativePlayer()) {
+          ensureNativeServicePlaying();
+        } else {
+          resumePlayback();
+          startKeepAlive(getIsPlaying);
+        }
       }
     });
   } catch {
@@ -99,13 +113,20 @@ function bindNativeMediaControls() {
     if (action === 'previous') void store.previous();
     if (action === 'resume-background') {
       if (store.isPlaying || isAutoResumeAllowed()) {
-        resumePlayback();
-        startKeepAlive(() => usePlayerStore.getState().isPlaying);
-        ensureNativeServicePlaying();
+        if (isUsingNativePlayer()) {
+          ensureNativeServicePlaying();
+        } else {
+          resumePlayback();
+          startKeepAlive(() => usePlayerStore.getState().isPlaying);
+        }
       }
     }
     if (action === 'ended') {
       void store.next(false);
+    }
+    if (action === 'error') {
+      toast.error('Playback failed — try another song');
+      store.setPlaying(false);
     }
   }) as EventListener);
 }
@@ -117,10 +138,13 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
   const onVisibility = () => {
     if (document.hidden) {
       if (getIsPlaying() || usePlayerStore.getState().isPlaying) {
-        resumePlayback();
-        startKeepAlive(getIsPlaying);
-        requestWakeLock();
-        ensureNativeServicePlaying();
+        if (isUsingNativePlayer()) {
+          ensureNativeServicePlaying();
+        } else {
+          resumePlayback();
+          startKeepAlive(getIsPlaying);
+          requestWakeLock();
+        }
       }
     } else {
       if (!getIsPlaying()) stopKeepAlive();
@@ -147,14 +171,17 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
 }
 
 export function onPlaybackStateChange(isPlaying: boolean, getIsPlaying: () => boolean) {
-  const track = usePlayerStore.getState().currentTrack;
   if (isPlaying) {
+    if (isUsingNativePlayer()) {
+      // Foreground service owns playback; keep-alive only needed if we leave the app.
+      return;
+    }
     requestWakeLock();
     startKeepAlive(getIsPlaying);
     void syncNativeBackgroundAudio({
       playing: true,
-      title: track?.title,
-      artist: track?.artist,
+      title: usePlayerStore.getState().currentTrack?.title,
+      artist: usePlayerStore.getState().currentTrack?.artist,
     });
     return;
   }
@@ -162,13 +189,21 @@ export function onPlaybackStateChange(isPlaying: boolean, getIsPlaying: () => bo
   // If the page is hidden, a "paused" signal is often from Android/YouTube —
   // keep the service + keep-alive and force resume instead of tearing down.
   if (document.hidden && isAutoResumeAllowed()) {
-    resumePlayback();
-    startKeepAlive(getIsPlaying);
-    ensureNativeServicePlaying();
+    if (isUsingNativePlayer()) {
+      ensureNativeServicePlaying();
+    } else {
+      resumePlayback();
+      startKeepAlive(getIsPlaying);
+      ensureNativeServicePlaying();
+    }
     return;
   }
 
   stopKeepAlive();
   releaseWakeLock();
-  void stopNativeBackgroundAudio();
+  if (isAndroidNative() && isUsingNativePlayer()) {
+    void pauseNativeAudio();
+  } else if (!isAndroidNative()) {
+    void stopNativeBackgroundAudio();
+  }
 }

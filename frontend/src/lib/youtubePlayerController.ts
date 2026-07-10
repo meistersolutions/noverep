@@ -13,6 +13,13 @@ import {
 } from '@/lib/nativeBackgroundAudio';
 import { usePlayerStore } from '@/stores/playerStore';
 
+/** True when Android ExoPlayer owns audio (not YouTube iframe fallback). */
+let usingNativePlayer = false;
+
+export function isUsingNativePlayer(): boolean {
+  return usingNativePlayer;
+}
+
 export interface YTPlayerInstance {
   loadVideoById: (videoId: string) => void;
   cueVideoById: (videoId: string) => void;
@@ -275,6 +282,9 @@ export async function cueVideoForResume(videoId: string, volume = 80): Promise<v
 
 /** YouTube fires ENDED when switching videos – ignore those spurious events. */
 export function handlePlayerStateChange(state: number, target: YTPlayerInstance) {
+  // ExoPlayer owns audio — ignore iframe events (they pause/end when WebView backgrounds).
+  if (usingNativePlayer) return;
+
   if (state === YT_PLAYING) {
     const videoId = target.getVideoData?.()?.video_id;
     if (videoId) notifyActiveVideo(videoId);
@@ -330,7 +340,7 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
 }
 
 export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
-  // Android app: NewPipe-style ExoPlayer stream (survives screen-off).
+  // Android app: prefer NewPipe-style ExoPlayer; fall back to YouTube iframe if stream fails.
   if (isAndroidNative()) {
     const track = usePlayerStore.getState().currentTrack;
     playbackGeneration += 1;
@@ -340,12 +350,30 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
     prefetchedVideoId = null;
     notifyActiveVideo(videoId);
     onPlayingChange?.(true);
-    await playNativeAudio({
-      videoId,
-      title: track?.title,
-      artist: track?.artist,
-    });
-    return;
+    try {
+      await playNativeAudio({
+        videoId,
+        title: track?.title,
+        artist: track?.artist,
+      });
+      usingNativePlayer = true;
+      return;
+    } catch (err) {
+      console.warn('[noverep] native audio failed, falling back to YouTube iframe', err);
+      usingNativePlayer = false;
+      await stopNativeAudio().catch(() => {});
+      // Background play needs ExoPlayer; iframe only works while app is open.
+      try {
+        const { default: toast } = await import('react-hot-toast');
+        const msg = err instanceof Error ? err.message : 'stream unavailable';
+        toast(`In-app only: ${msg}`, { icon: '⚠️', duration: 5000 });
+      } catch {
+        /* ignore */
+      }
+      // Continue to iframe path below so the user still hears audio in-app.
+    }
+  } else {
+    usingNativePlayer = false;
   }
 
   ensureYouTubeApiScript();
@@ -379,7 +407,7 @@ export function pausePlayback() {
   wantPlaying = false;
   allowAutoResume = false;
   playbackGeneration += 1;
-  if (isAndroidNative()) {
+  if (isAndroidNative() && usingNativePlayer) {
     void pauseNativeAudio();
     onPlayingChange?.(false);
     return;
@@ -390,7 +418,7 @@ export function pausePlayback() {
 export function resumePlayback() {
   wantPlaying = true;
   allowAutoResume = true;
-  if (isAndroidNative()) {
+  if (isAndroidNative() && usingNativePlayer) {
     void resumeNativeAudio();
     onPlayingChange?.(true);
     return;
@@ -402,7 +430,7 @@ export function resumePlayback() {
 }
 
 export function seekPlayback(seconds: number) {
-  if (isAndroidNative()) {
+  if (isAndroidNative() && usingNativePlayer) {
     void seekNativeAudio(seconds);
     return;
   }
@@ -418,7 +446,7 @@ export async function syncNativePlaybackClock(
   setCurrentTime: (t: number) => void,
   setDuration: (d: number) => void,
 ): Promise<void> {
-  if (!isAndroidNative() || !isNativeAudioActive()) return;
+  if (!isAndroidNative() || !usingNativePlayer || !isNativeAudioActive()) return;
   const status = await getNativeAudioStatus();
   if (!status) return;
   if (Number.isFinite(status.position)) setCurrentTime(status.position);

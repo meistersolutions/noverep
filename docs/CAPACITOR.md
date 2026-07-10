@@ -106,6 +106,25 @@ Then Run again from Android Studio (or `npm run cap:run:android` / `npm run cap:
 | Autoplay in WebView | `mediaPlaybackRequiresUserGesture=false` |
 | YouTube iframe playback | Off-screen 320×180 player |
 
+## Check you’re on the latest build
+
+In the app open **More (Profile)** or **Settings**. At the bottom you should see:
+
+`NoRepeat v1.5.0 (6)`
+
+If that number is older, you don’t have the latest install yet.
+
+To bump for the next release, edit `frontend/src/lib/appVersion.ts`:
+
+```ts
+export const APP_VERSION = '1.5.1';
+export const APP_BUILD = 7;
+```
+
+Then `npm run cap:sync` (auto-syncs Android `versionName` / `versionCode`) and reinstall.
+
+---
+
 ## Background playback (Android) — NewPipe-style
 
 The Android app no longer relies on the YouTube iframe for audio when the screen
