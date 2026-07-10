@@ -8,6 +8,7 @@ interface BackgroundAudioPlugin {
     title?: string;
     artist?: string;
     headers?: Record<string, string>;
+    headersJson?: string;
   }): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
@@ -38,26 +39,41 @@ export async function playNativeAudio(options: {
   artist?: string;
 }): Promise<void> {
   if (!isAndroidNative()) return;
-  const stream = await api.getAudioStream('youtube', options.videoId);
+  let stream;
+  try {
+    stream = await api.getAudioStream('youtube', options.videoId);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Stream API failed: ${msg}`);
+  }
   if (!stream?.url) {
     throw new Error('No audio stream URL');
   }
   const lower = stream.url.toLowerCase();
-  if (
-    lower.includes('storyboard') ||
-    lower.includes('ytimg.com') ||
-    /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(lower)
-  ) {
-    throw new Error('Server returned a non-audio URL — redeploy API stream fix');
+  // Only reject obvious non-media hosts (avoid false positives on googlevideo query strings).
+  if (lower.includes('storyboard') || lower.includes('ytimg.com/sb/') || lower.includes('i.ytimg.com')) {
+    throw new Error('Server returned a non-audio URL');
   }
+  if (!/^https?:\/\//i.test(stream.url)) {
+    throw new Error('Invalid stream URL scheme');
+  }
+
   activeVideoId = options.videoId;
   wantPlaying = true;
-  await BackgroundAudio.playStream({
-    url: stream.url,
-    title: options.title || stream.title || 'NoRepeat',
-    artist: options.artist || stream.artist || 'Playing',
-    headers: stream.http_headers || undefined,
-  });
+  try {
+    await BackgroundAudio.playStream({
+      url: stream.url,
+      title: options.title || stream.title || 'NoRepeat',
+      artist: options.artist || stream.artist || 'Playing',
+      // Pass as JSON string — more reliable across the Capacitor bridge than nested objects.
+      headersJson: stream.http_headers ? JSON.stringify(stream.http_headers) : undefined,
+    });
+  } catch (err) {
+    activeVideoId = null;
+    wantPlaying = false;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`ExoPlayer start failed: ${msg}`);
+  }
 }
 
 export async function pauseNativeAudio(): Promise<void> {

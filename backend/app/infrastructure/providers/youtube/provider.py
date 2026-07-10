@@ -1,10 +1,14 @@
 import asyncio
+import base64
 import re
+import tempfile
+from pathlib import Path
 from typing import Any
 
 import structlog
 import yt_dlp
 
+from app.config import settings
 from app.domain.entities import ProviderTrack
 from app.domain.interfaces import MusicProvider
 from app.infrastructure.providers.youtube.song_filter import (
@@ -21,6 +25,40 @@ from app.infrastructure.providers.youtube.metadata_utils import (
 )
 
 logger = structlog.get_logger()
+
+# Try several YouTube player clients; datacenter IPs often need cookies too.
+_AUDIO_CLIENT_ATTEMPTS: list[list[str]] = [
+    ["android", "ios"],
+    ["tv_embedded", "tv"],
+    ["mweb"],
+    ["web"],
+]
+
+
+def _youtube_cookiefile() -> str | None:
+    """Resolve a Netscape cookies.txt path for yt-dlp (Render-friendly)."""
+    file_path = (settings.youtube_cookies_file or "").strip()
+    if file_path and Path(file_path).is_file():
+        return file_path
+
+    raw = (settings.youtube_cookies or "").strip()
+    if not raw and settings.youtube_cookies_b64:
+        try:
+            raw = base64.b64decode(settings.youtube_cookies_b64).decode("utf-8")
+        except Exception:
+            logger.warning("youtube_cookies_b64_invalid")
+            raw = ""
+
+    if not raw:
+        return None
+
+    path = Path(tempfile.gettempdir()) / "noverep_youtube_cookies.txt"
+    try:
+        path.write_text(raw, encoding="utf-8")
+        return str(path)
+    except Exception as e:
+        logger.warning("youtube_cookies_write_failed", error=str(e))
+        return None
 
 
 def _parse_duration(title: str) -> tuple[str, str]:
@@ -128,18 +166,17 @@ class YouTubeProvider(MusicProvider):
             opts["ignore_no_formats_error"] = True
         return opts
 
-    def _audio_stream_ydl_opts(self) -> dict[str, Any]:
+    def _audio_stream_ydl_opts(self, player_clients: list[str]) -> dict[str, Any]:
         """Options tuned for resolving a direct ExoPlayer-compatible audio URL."""
-        return {
+        opts: dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
             "noplaylist": True,
             "socket_timeout": 30,
-            # Prefer clients that still expose progressive/audio URLs on servers.
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "ios", "web"],
+                    "player_client": player_clients,
                 }
             },
             "format": (
@@ -147,6 +184,10 @@ class YouTubeProvider(MusicProvider):
                 "bestaudio/best[acodec!=none]"
             ),
         }
+        cookiefile = _youtube_cookiefile()
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+        return opts
 
     async def search(
         self,
@@ -198,36 +239,67 @@ class YouTubeProvider(MusicProvider):
 
     def _get_audio_stream_sync(self, provider_track_id: str) -> dict[str, Any]:
         url = f"https://www.youtube.com/watch?v={provider_track_id}"
-        with yt_dlp.YoutubeDL(self._audio_stream_ydl_opts()) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise ValueError("No stream info")
+        last_error: Exception | None = None
+        cookiefile = _youtube_cookiefile()
 
-            stream_url, http_headers, mime = _pick_audio_stream(info)
+        for clients in _AUDIO_CLIENT_ATTEMPTS:
+            try:
+                with yt_dlp.YoutubeDL(self._audio_stream_ydl_opts(clients)) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        raise ValueError("No stream info")
 
-            title = info.get("title") or f"YouTube {provider_track_id}"
-            artist = (
-                info.get("artist")
-                or info.get("uploader")
-                or info.get("channel")
-                or "Unknown Artist"
-            )
-            duration = info.get("duration")
-            thumbnail = info.get("thumbnail")
-            if not thumbnail and info.get("thumbnails"):
-                thumbnail = info["thumbnails"][-1].get("url")
+                    stream_url, http_headers, mime = _pick_audio_stream(info)
 
-            return {
-                "provider": "youtube",
-                "provider_track_id": provider_track_id,
-                "url": stream_url,
-                "title": title,
-                "artist": artist,
-                "duration_seconds": int(duration) if duration else None,
-                "thumbnail_url": thumbnail,
-                "mime_type": mime or "audio/mp4",
-                "http_headers": http_headers or None,
-            }
+                    title = info.get("title") or f"YouTube {provider_track_id}"
+                    artist = (
+                        info.get("artist")
+                        or info.get("uploader")
+                        or info.get("channel")
+                        or "Unknown Artist"
+                    )
+                    duration = info.get("duration")
+                    thumbnail = info.get("thumbnail")
+                    if not thumbnail and info.get("thumbnails"):
+                        thumbnail = info["thumbnails"][-1].get("url")
+
+                    logger.info(
+                        "audio_stream_ok",
+                        track_id=provider_track_id,
+                        clients=clients,
+                        cookies=bool(cookiefile),
+                    )
+                    return {
+                        "provider": "youtube",
+                        "provider_track_id": provider_track_id,
+                        "url": stream_url,
+                        "title": title,
+                        "artist": artist,
+                        "duration_seconds": int(duration) if duration else None,
+                        "thumbnail_url": thumbnail,
+                        "mime_type": mime or "audio/mp4",
+                        "http_headers": http_headers or None,
+                    }
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "audio_stream_client_failed",
+                    track_id=provider_track_id,
+                    clients=clients,
+                    error=str(e),
+                    cookies=bool(cookiefile),
+                )
+
+        if last_error:
+            hint = ""
+            err_text = str(last_error).lower()
+            if "bot" in err_text or "sign in" in err_text:
+                hint = (
+                    " YouTube is blocking this server IP. Set YOUTUBE_COOKIES "
+                    "(Netscape cookies.txt) on the API host and redeploy."
+                )
+            raise RuntimeError(f"{last_error}.{hint}") from last_error
+        raise ValueError("No stream info")
 
     def _get_metadata_sync(self, provider_track_id: str, songs_only: bool = True) -> ProviderTrack:
         url = f"https://www.youtube.com/watch?v={provider_track_id}"

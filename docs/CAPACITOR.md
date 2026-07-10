@@ -152,9 +152,28 @@ npm run cap:android
 
 Then **Run ▶** on your phone.
 
+### Background audio + YouTube bot checks (Render)
+
+Android background play needs `/tracks/audio-stream` (yt-dlp). Datacenter IPs (Render)
+often get: `Sign in to confirm you're not a bot`.
+
+**Fix:** export YouTube cookies and set them on `noverep-api`:
+
+1. Chrome/Firefox: install **Get cookies.txt LOCALLY**
+2. Open an **incognito** window → log into YouTube → play any video
+3. Export cookies for `youtube.com` (Netscape format)
+4. Render → **noverep-api** → **Environment** → add either:
+   - `YOUTUBE_COOKIES` = full cookies.txt contents (multiline), or
+   - `YOUTUBE_COOKIES_B64` = base64 of that file (easier in some UIs)
+5. Redeploy the API
+
+Use a throwaway Google account if possible (cookies can expire / get flagged).
+
+Without cookies, the app still plays **in-app** via YouTube iframe; background will not work.
+
 ### Limitations
 
-- Stream URLs come from yt-dlp on the API host; if extraction fails on Render, playback will error (check API logs).
+- Stream URLs come from yt-dlp on the API host; if extraction fails on Render, playback falls back to in-app iframe.
 - Web / mobile browser still uses the YouTube iframe (background limits remain there).
 - YouTube ToS still applies; this is for personal sideload use.
 
@@ -169,6 +188,7 @@ Then **Run ▶** on your phone.
 | Gradle sync fails | Open Android Studio → SDK Manager → install SDK 35 + Build-Tools |
 | Phone not listed | Enable USB debugging; try another cable; accept the RSA prompt on phone |
 | Audio stops when screen off | Phone Settings → Apps → NoRepeat → Battery → Unrestricted |
+| Toast: YouTube blocked server stream | Set `YOUTUBE_COOKIES` / `YOUTUBE_COOKIES_B64` on Render API and redeploy |
 
 ## Scripts
 

@@ -2,6 +2,7 @@ package com.noverep.app;
 
 import android.content.Intent;
 import android.os.Build;
+import android.util.Log;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -11,6 +12,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 @CapacitorPlugin(name = "BackgroundAudio")
 public class BackgroundAudioPlugin extends Plugin {
+    private static final String TAG = "BackgroundAudio";
 
     @PluginMethod
     public void playStream(PluginCall call) {
@@ -28,45 +30,68 @@ public class BackgroundAudioPlugin extends Plugin {
         intent.putExtra(MediaPlaybackService.EXTRA_TITLE, title);
         intent.putExtra(MediaPlaybackService.EXTRA_ARTIST, artist);
 
-        JSObject headers = call.getObject("headers");
-        if (headers != null) {
-            intent.putExtra(MediaPlaybackService.EXTRA_HEADERS_JSON, headers.toString());
+        String headersJson = call.getString("headersJson");
+        if (headersJson == null || headersJson.isEmpty()) {
+            JSObject headers = call.getObject("headers");
+            if (headers != null) {
+                headersJson = headers.toString();
+            }
+        }
+        if (headersJson != null && !headersJson.isEmpty()) {
+            intent.putExtra(MediaPlaybackService.EXTRA_HEADERS_JSON, headersJson);
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getContext().startForegroundService(intent);
-        } else {
-            getContext().startService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                getContext().startForegroundService(intent);
+            } else {
+                getContext().startService(intent);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            Log.e(TAG, "playStream failed", e);
+            call.reject("Failed to start playback service: " + e.getMessage(), e);
         }
-        call.resolve();
     }
 
     @PluginMethod
     public void pause(PluginCall call) {
         Intent intent = new Intent(getContext(), MediaPlaybackService.class);
         intent.setAction(MediaPlaybackService.ACTION_PAUSE);
-        getContext().startService(intent);
-        call.resolve();
+        try {
+            getContext().startService(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("pause failed: " + e.getMessage(), e);
+        }
     }
 
     @PluginMethod
     public void resume(PluginCall call) {
         Intent intent = new Intent(getContext(), MediaPlaybackService.class);
         intent.setAction(MediaPlaybackService.ACTION_RESUME);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getContext().startForegroundService(intent);
-        } else {
-            getContext().startService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                getContext().startForegroundService(intent);
+            } else {
+                getContext().startService(intent);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("resume failed: " + e.getMessage(), e);
         }
-        call.resolve();
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
         Intent intent = new Intent(getContext(), MediaPlaybackService.class);
         intent.setAction(MediaPlaybackService.ACTION_STOP);
-        getContext().startService(intent);
-        call.resolve();
+        try {
+            getContext().startService(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("stop failed: " + e.getMessage(), e);
+        }
     }
 
     @PluginMethod
@@ -75,8 +100,12 @@ public class BackgroundAudioPlugin extends Plugin {
         Intent intent = new Intent(getContext(), MediaPlaybackService.class);
         intent.setAction(MediaPlaybackService.ACTION_SEEK);
         intent.putExtra(MediaPlaybackService.EXTRA_POSITION_MS, (long) (seconds * 1000));
-        getContext().startService(intent);
-        call.resolve();
+        try {
+            getContext().startService(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("seek failed: " + e.getMessage(), e);
+        }
     }
 
     @PluginMethod

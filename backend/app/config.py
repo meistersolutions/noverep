@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
 
     youtube_api_key: str = ""
+    # Netscape cookies.txt contents (or path) so yt-dlp can bypass YouTube bot checks on datacenter IPs.
+    youtube_cookies: str = ""
+    youtube_cookies_b64: str = ""
+    youtube_cookies_file: str = ""
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
 

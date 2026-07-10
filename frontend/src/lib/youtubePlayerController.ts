@@ -366,7 +366,11 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
       try {
         const { default: toast } = await import('react-hot-toast');
         const msg = err instanceof Error ? err.message : 'stream unavailable';
-        toast(`In-app only: ${msg}`, { icon: '⚠️', duration: 5000 });
+        const short =
+          /bot|sign in/i.test(msg)
+            ? 'YouTube blocked server stream (need API cookies) — playing in-app only'
+            : `In-app only: ${msg}`;
+        toast(short, { icon: '⚠️', duration: 6000 });
       } catch {
         /* ignore */
       }
