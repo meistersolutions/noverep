@@ -40,6 +40,17 @@ class TrackResponse(BaseModel):
     content_kind: str = "song"
 
 
+class AudioStreamResponse(BaseModel):
+    provider: str
+    provider_track_id: str
+    url: str
+    title: str
+    artist: str
+    duration_seconds: int | None = None
+    thumbnail_url: str | None = None
+    mime_type: str | None = None
+
+
 class SearchResponse(BaseModel):
     query: str
     results: list[TrackResponse]

@@ -1,6 +1,9 @@
 /**
  * Patches generated Capacitor native projects for background audio playback.
  * Run after: npx cap add android/ios  &&  npm run cap:patch-native
+ *
+ * Safe to re-run: skips permissions / cleartext already present.
+ * Does not remove network_security_config or other custom app settings.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,6 +16,8 @@ const ANDROID_MANIFEST = path.join(frontend, 'android', 'app', 'src', 'main', 'A
 const IOS_APP_DELEGATE = path.join(frontend, 'ios', 'App', 'App', 'AppDelegate.swift');
 
 const ANDROID_PERMISSIONS = [
+  'android.permission.INTERNET',
+  'android.permission.ACCESS_NETWORK_STATE',
   'android.permission.WAKE_LOCK',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
@@ -29,10 +34,6 @@ function patchAndroidManifest() {
 
   for (const perm of ANDROID_PERMISSIONS) {
     if (!xml.includes(perm)) {
-      xml = xml.replace(
-        '<manifest',
-        `<manifest`,
-      );
       xml = xml.replace(
         /(<manifest[^>]*>)/,
         `$1\n    <uses-permission android:name="${perm}" />`,

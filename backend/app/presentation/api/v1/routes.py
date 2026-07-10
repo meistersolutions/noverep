@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.dto.schemas import (
     AddPlaylistTrackRequest,
     AddToQueueRequest,
+    AudioStreamResponse,
     CreatePlaylistRequest,
     FeedbackRequest,
     FeedbackResponse,
@@ -293,6 +294,30 @@ async def search(
             ) from e
     results = [_track_response(c.track, c.score) for c in scored]
     return SearchResponse(query=q, results=results, total=len(results))
+
+
+@router.get("/tracks/audio-stream", response_model=AudioStreamResponse)
+async def track_audio_stream(
+    provider: str = Query(default="youtube"),
+    provider_track_id: str = Query(..., min_length=1),
+    user: UserModel = Depends(get_current_user),
+    providers=Depends(get_providers),
+):
+    """Direct audio URL for native background playback (Android ExoPlayer)."""
+    provider_impl = providers.get(provider)
+    if not provider_impl:
+        raise HTTPException(status_code=400, detail="Unknown provider")
+    if not hasattr(provider_impl, "get_audio_stream"):
+        raise HTTPException(status_code=400, detail="Provider does not support audio streams")
+    try:
+        data = await provider_impl.get_audio_stream(provider_track_id)
+    except Exception as e:
+        logger.exception("audio_stream_failed", provider=provider, track_id=provider_track_id)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not resolve audio stream: {e}",
+        ) from e
+    return AudioStreamResponse(**data)
 
 
 @router.get("/tracks/details", response_model=SongDetailsResponse)

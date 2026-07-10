@@ -13,4 +13,16 @@ cloudflared tunnel --url http://localhost:5173
 git add -A ; git commit -m "Fix Applied: Lib from MUSICBRAINZ" ; git push
 
 
+ cd C:\Users\smile\Projects\noverep\frontend\android
+PS C:\Users\smile\Projects\noverep\frontend\android> 
+PS C:\Users\smile\Projects\noverep\frontend\android> $adb = "C:\Users\smile\AppData\Local\Android\Sdk\platform-tools\adb.exe"
+PS C:\Users\smile\Projects\noverep\frontend\android> 
+PS C:\Users\smile\Projects\noverep\frontend\android> & $adb devices
+List of devices attached
+adb-3C163100C8800000-HwlEDR._adb-tls-connect._tcp       device
+
+PS C:\Users\smile\Projects\noverep\frontend\android> & $adb install -r app\build\outputs\apk\debug\app-debug.apk
+
+
+
 

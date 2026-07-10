@@ -14,6 +14,7 @@
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios",
     "cap:run:android": "npm run cap:sync && npx cap run android",
+    "cap:apk": "npm run cap:sync && cd android && .\\gradlew.bat assembleDebug",
     "cap:patch-native": "node scripts/patch-native-background.mjs"
   },
   "dependencies": {

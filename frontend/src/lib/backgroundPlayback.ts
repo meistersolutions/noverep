@@ -1,12 +1,18 @@
 import { isAutoResumeAllowed, resumePlayback } from '@/lib/youtubePlayerController';
-import { isNativeApp } from '@/lib/nativePlatform';
+import { isAndroidNative, isNativeApp } from '@/lib/nativePlatform';
+import {
+  stopNativeBackgroundAudio,
+  syncNativeBackgroundAudio,
+} from '@/lib/nativeBackgroundAudio';
+import { usePlayerStore } from '@/stores/playerStore';
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 let wakeLock: WakeLockSentinel | null = null;
 let appStateListener: { remove: () => void } | null = null;
+let mediaEventBound = false;
 
-/** Native shells suspend WebViews aggressively — retry occasionally while playing. */
-const KEEP_ALIVE_MS = isNativeApp ? 2000 : 3000;
+/** Native shells suspend WebViews aggressively — retry often while playing. */
+const KEEP_ALIVE_MS = isAndroidNative() ? 800 : isNativeApp ? 2000 : 3000;
 
 async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
@@ -35,7 +41,9 @@ function resumeIfPlaying(getIsPlaying: () => boolean) {
 function startKeepAlive(getIsPlaying: () => boolean) {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => {
-    if (document.hidden && getIsPlaying() && isAutoResumeAllowed()) {
+    const store = usePlayerStore.getState();
+    const shouldPlay = getIsPlaying() || store.isPlaying;
+    if ((document.hidden || isAndroidNative()) && shouldPlay && isAutoResumeAllowed()) {
       resumePlayback();
     }
   }, KEEP_ALIVE_MS);
@@ -48,6 +56,15 @@ function stopKeepAlive() {
   }
 }
 
+function ensureNativeServicePlaying() {
+  const track = usePlayerStore.getState().currentTrack;
+  void syncNativeBackgroundAudio({
+    playing: true,
+    title: track?.title,
+    artist: track?.artist,
+  });
+}
+
 async function bindCapacitorAppState(getIsPlaying: () => boolean) {
   if (!isNativeApp || appStateListener) return;
 
@@ -56,10 +73,12 @@ async function bindCapacitorAppState(getIsPlaying: () => boolean) {
     appStateListener = await App.addListener('appStateChange', ({ isActive }) => {
       if (isActive) {
         resumeIfPlaying(getIsPlaying);
-        stopKeepAlive();
-      } else if (getIsPlaying() && isAutoResumeAllowed()) {
+        // Keep service if still playing; don't stop keep-alive until foreground settles
+        if (!getIsPlaying()) stopKeepAlive();
+      } else if (getIsPlaying() || usePlayerStore.getState().isPlaying) {
         resumePlayback();
         startKeepAlive(getIsPlaying);
+        ensureNativeServicePlaying();
       }
     });
   } catch {
@@ -67,18 +86,44 @@ async function bindCapacitorAppState(getIsPlaying: () => boolean) {
   }
 }
 
+function bindNativeMediaControls() {
+  if (!isAndroidNative() || mediaEventBound) return;
+  mediaEventBound = true;
+
+  window.addEventListener('noverep-media', ((event: CustomEvent<{ action: string }>) => {
+    const action = event.detail?.action;
+    const store = usePlayerStore.getState();
+    if (action === 'play') store.setPlaying(true);
+    if (action === 'pause') store.setPlaying(false);
+    if (action === 'next') void store.next(true);
+    if (action === 'previous') void store.previous();
+    if (action === 'resume-background') {
+      if (store.isPlaying || isAutoResumeAllowed()) {
+        resumePlayback();
+        startKeepAlive(() => usePlayerStore.getState().isPlaying);
+        ensureNativeServicePlaying();
+      }
+    }
+    if (action === 'ended') {
+      void store.next(false);
+    }
+  }) as EventListener);
+}
+
 export function initBackgroundPlayback(getIsPlaying: () => boolean) {
   void bindCapacitorAppState(getIsPlaying);
+  bindNativeMediaControls();
 
   const onVisibility = () => {
     if (document.hidden) {
-      if (getIsPlaying() && isAutoResumeAllowed()) {
+      if (getIsPlaying() || usePlayerStore.getState().isPlaying) {
         resumePlayback();
         startKeepAlive(getIsPlaying);
         requestWakeLock();
+        ensureNativeServicePlaying();
       }
     } else {
-      stopKeepAlive();
+      if (!getIsPlaying()) stopKeepAlive();
       resumeIfPlaying(getIsPlaying);
     }
   };
@@ -97,15 +142,33 @@ export function initBackgroundPlayback(getIsPlaying: () => boolean) {
     releaseWakeLock();
     appStateListener?.remove();
     appStateListener = null;
+    void stopNativeBackgroundAudio();
   };
 }
 
 export function onPlaybackStateChange(isPlaying: boolean, getIsPlaying: () => boolean) {
+  const track = usePlayerStore.getState().currentTrack;
   if (isPlaying) {
     requestWakeLock();
-    if (document.hidden && isAutoResumeAllowed()) startKeepAlive(getIsPlaying);
-  } else {
-    stopKeepAlive();
-    releaseWakeLock();
+    startKeepAlive(getIsPlaying);
+    void syncNativeBackgroundAudio({
+      playing: true,
+      title: track?.title,
+      artist: track?.artist,
+    });
+    return;
   }
+
+  // If the page is hidden, a "paused" signal is often from Android/YouTube —
+  // keep the service + keep-alive and force resume instead of tearing down.
+  if (document.hidden && isAutoResumeAllowed()) {
+    resumePlayback();
+    startKeepAlive(getIsPlaying);
+    ensureNativeServicePlaying();
+    return;
+  }
+
+  stopKeepAlive();
+  releaseWakeLock();
+  void stopNativeBackgroundAudio();
 }

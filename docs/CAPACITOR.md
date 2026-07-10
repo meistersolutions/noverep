@@ -1,46 +1,35 @@
-# Capacitor native app (background audio)
+# NoRepeat Android app (Capacitor)
 
-Wrap NoRepeat in a **Capacitor** shell so iOS/Android treat playback as a media app (background audio mode, lock-screen controls via Media Session).
+Native Android shell around the NoRepeat web app. Uses your deployed API at
+`https://noverep-api.onrender.com` and includes the latest queue / history features.
 
-The web app and YouTube iframe player stay the same — the native shell improves background survival on mobile.
+## What you need
 
-## Prerequisites
-
-| Platform | Tools |
-|----------|--------|
-| **Android** | [Android Studio](https://developer.android.com/studio), JDK 17+ |
-| **iOS** | macOS, Xcode, Apple Developer account (for device install) |
-| **Both** | Node.js 18+, npm |
+1. **Node.js 18+** and npm
+2. **Android Studio** (latest stable) with:
+   - Android SDK 35
+   - Android SDK Platform-Tools
+   - A device or emulator
+3. On your phone: **Developer options → USB debugging** ON
 
 ## One-time setup
 
-From `frontend/`:
-
-```bash
+```powershell
+cd C:\Users\smile\Projects\noverep\frontend
 npm install
-npm run build:capacitor
-npx cap add android          # Windows/macOS/Linux
-npx cap add ios              # macOS only
-npm run cap:patch-native     # background audio permissions + iOS AVAudioSession
 ```
 
-Copy env for production API (Render):
+Confirm API URL is set (already created for you):
 
-```bash
-cp .env.capacitor.example .env.production.local
-# Edit VITE_API_URL to your deployed API, e.g. https://noverep-api.onrender.com/api/v1
+`frontend/.env.production.local`
+
+```env
+VITE_API_URL=https://noverep-api.onrender.com/api/v1
 ```
 
-Rebuild with that env, then sync:
+### Backend CORS (Render)
 
-```bash
-npm run cap:sync
-npm run cap:patch-native
-```
-
-### Backend CORS
-
-Add Capacitor origins to your API `.env` / Render env:
+In the **noverep-api** Render env, ensure `CORS_ORIGINS` includes Capacitor origins, for example:
 
 ```env
 CORS_ORIGINS=http://localhost:5173,https://noverep.onrender.com,capacitor://localhost,https://localhost,http://localhost
@@ -48,79 +37,147 @@ CORS_ORIGINS=http://localhost:5173,https://noverep.onrender.com,capacitor://loca
 
 Redeploy the API after changing CORS.
 
-## Run on device
+---
 
-### Android
+## Build + install on your phone (recommended)
 
-```bash
+### Option A — USB + Android Studio (easiest)
+
+1. Plug in your phone with USB debugging enabled.
+2. From `frontend/`:
+
+```powershell
+cd C:\Users\smile\Projects\noverep\frontend
+npm run cap:sync
+npm run cap:android
+```
+
+3. Android Studio opens the `android/` project.
+4. Wait for Gradle sync to finish.
+5. Select your phone in the device dropdown.
+6. Click **Run** (green play).
+
+The app installs as **NoRepeat** (`com.noverep.app`).
+
+### Option B — CLI install
+
+```powershell
+cd C:\Users\smile\Projects\noverep\frontend
 npm run cap:run:android
-# or
-npm run cap:sync && npm run cap:android   # opens Android Studio → Run
 ```
 
-Enable **USB debugging** on the phone, connect via USB, pick the device in Android Studio.
+### Option C — Build APK and sideload
 
-### iOS (Mac)
-
-```bash
-npm run cap:sync && npm run cap:ios
+```powershell
+cd C:\Users\smile\Projects\noverep\frontend
+npm run cap:apk
 ```
 
-Open the workspace in Xcode, select your team, run on a physical device (background audio is unreliable in Simulator).
+APK path:
 
-## Dev with live reload (optional)
+```
+frontend\android\app\build\outputs\apk\debug\app-debug.apk
+```
 
-1. Start Vite on your LAN IP:
+Copy that file to your phone and open it to install (allow “Install unknown apps” for Files/Chrome if prompted).
 
-   ```bash
-   npm run dev -- --host 0.0.0.0
-   ```
+---
 
-2. In `capacitor.config.ts`, temporarily set:
+## After every web/app code change
 
-   ```ts
-   server: {
-     url: 'http://192.168.1.42:5173',
-     cleartext: true,
-   },
-   ```
+Re-sync so the Android shell gets the new UI:
 
-3. `npm run cap:sync` and run from Android Studio / Xcode.
+```powershell
+cd C:\Users\smile\Projects\noverep\frontend
+npm run cap:sync
+```
 
-4. Add your LAN origin to API `CORS_ORIGINS`.
+Then Run again from Android Studio (or `npm run cap:run:android` / `npm run cap:apk`).
 
-Remove `server.url` before store builds.
+---
 
-## What the native shell changes
+## What’s included in this shell
 
-- **iOS** `UIBackgroundModes: audio` + `AVAudioSession` playback category
-- **Android** `WAKE_LOCK`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK`
-- **Capacitor `App` plugin** — resume playback when app goes to background
-- **Off-screen YouTube iframe** — 320×180 on native (tiny 1×1 iframes get paused on iOS)
-- **Faster keep-alive retries** when backgrounded in the native app
+| Feature | Status |
+|---------|--------|
+| Latest web UI (queue remove, history CSV, NoRepeat memory) | Bundled via `cap:sync` |
+| Production API (`noverep-api.onrender.com`) | Baked via `.env.production.local` |
+| Background / lock-screen keep-alive | Wake lock + App plugin + Media Session |
+| Autoplay in WebView | `mediaPlaybackRequiresUserGesture=false` |
+| YouTube iframe playback | Off-screen 320×180 player |
 
-## Limitations
+## Background playback (Android) — NewPipe-style
 
-- YouTube may still pause in edge cases (OS updates, low memory). This is much better than mobile Safari but not identical to Spotify.
-- **iOS Simulator** often stops background audio — test on a real iPhone.
-- YouTube ToS still applies; this does not download or re-stream video.
+The Android app no longer relies on the YouTube iframe for audio when the screen
+is off. Like NewPipe, it:
+
+1. Resolves a direct audio stream URL (`GET /tracks/audio-stream` via yt-dlp)
+2. Plays it with **ExoPlayer** inside a **foreground media service**
+
+You should see a persistent **NoRepeat** notification while a song plays, and
+audio should continue with the screen locked.
+
+### Requirements
+
+1. Deploy the latest **noverep-api** (includes `/tracks/audio-stream`)
+2. Rebuild/reinstall the Android app (**v1.4.0+**)
+3. Phone: Notifications allowed + Battery → Unrestricted for NoRepeat
+
+### After updating
+
+```powershell
+cd C:\Users\smile\Projects\noverep\frontend
+npm run cap:sync
+npm run cap:android
+```
+
+Then **Run ▶** on your phone.
+
+### Limitations
+
+- Stream URLs come from yt-dlp on the API host; if extraction fails on Render, playback will error (check API logs).
+- Web / mobile browser still uses the YouTube iframe (background limits remain there).
+- YouTube ToS still applies; this is for personal sideload use.
+
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| API network error in app | Set `VITE_API_URL` to full HTTPS API URL before `npm run build` |
-| CORS blocked | Add `capacitor://localhost` and `https://localhost` to API CORS |
-| Android cleartext HTTP | `cap:patch-native` sets `usesCleartextTraffic` for LAN dev |
-| No sound when locked | Confirm `npm run cap:patch-native` ran; rebuild in Xcode/Android Studio |
-| White screen | Run `npm run cap:sync` after every web build |
+| Problem | Fix |
+|---------|-----|
+| White screen | Run `npm run cap:sync` again, then reinstall |
+| API / network errors | Confirm `.env.production.local` has HTTPS API URL, then rebuild |
+| CORS errors | Add `https://localhost` and `capacitor://localhost` to API `CORS_ORIGINS` |
+| Gradle sync fails | Open Android Studio → SDK Manager → install SDK 35 + Build-Tools |
+| Phone not listed | Enable USB debugging; try another cable; accept the RSA prompt on phone |
+| Audio stops when screen off | Phone Settings → Apps → NoRepeat → Battery → Unrestricted |
 
 ## Scripts
 
 | Command | Purpose |
 |---------|---------|
-| `npm run build:capacitor` | Production web build → `dist/` |
-| `npm run cap:sync` | Build + copy web assets to native projects |
-| `npm run cap:patch-native` | Apply background-audio native patches |
+| `npm run cap:sync` | Build web app + copy into Android project + native patches |
 | `npm run cap:android` | Open Android Studio |
-| `npm run cap:ios` | Open Xcode |
+| `npm run cap:run:android` | Sync + install/run on connected device |
+| `npm run cap:apk` | Sync + build debug APK for sideload |
+| `npm run cap:patch-native` | Re-apply background-audio manifest patches only |
+
+## Optional: live reload while developing
+
+1. Start Vite on your LAN IP:
+
+```powershell
+npm run dev -- --host 0.0.0.0
+```
+
+2. Temporarily set in `capacitor.config.ts`:
+
+```ts
+server: {
+  url: 'http://YOUR_PC_LAN_IP:5173',
+  cleartext: true,
+},
+```
+
+3. `npm run cap:sync` and run from Android Studio.
+
+4. Remove `server.url` before production/sideload builds.

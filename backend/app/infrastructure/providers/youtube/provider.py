@@ -108,6 +108,68 @@ class YouTubeProvider(MusicProvider):
     ) -> ProviderTrack:
         return await asyncio.to_thread(self._get_metadata_sync, provider_track_id, songs_only)
 
+    async def get_audio_stream(self, provider_track_id: str) -> dict[str, Any]:
+        """Resolve a direct audio URL for native ExoPlayer background playback."""
+        return await asyncio.to_thread(self._get_audio_stream_sync, provider_track_id)
+
+    def _get_audio_stream_sync(self, provider_track_id: str) -> dict[str, Any]:
+        url = f"https://www.youtube.com/watch?v={provider_track_id}"
+        opts = self._ydl_opts(extract_flat=False)
+        opts.update(
+            {
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "noplaylist": True,
+            }
+        )
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ValueError("No stream info")
+
+            stream_url = info.get("url")
+            if not stream_url and info.get("formats"):
+                # Prefer audio-only progressive formats
+                audio_formats = [
+                    f
+                    for f in info["formats"]
+                    if f.get("url")
+                    and (f.get("vcodec") in (None, "none") or f.get("acodec") not in (None, "none"))
+                ]
+                audio_formats.sort(
+                    key=lambda f: (f.get("abr") or f.get("tbr") or 0),
+                    reverse=True,
+                )
+                if audio_formats:
+                    stream_url = audio_formats[0]["url"]
+                else:
+                    stream_url = info["formats"][-1].get("url")
+
+            if not stream_url:
+                raise ValueError("No audio URL in stream info")
+
+            title = info.get("title") or f"YouTube {provider_track_id}"
+            artist = (
+                info.get("artist")
+                or info.get("uploader")
+                or info.get("channel")
+                or "Unknown Artist"
+            )
+            duration = info.get("duration")
+            thumbnail = info.get("thumbnail")
+            if not thumbnail and info.get("thumbnails"):
+                thumbnail = info["thumbnails"][-1].get("url")
+
+            return {
+                "provider": "youtube",
+                "provider_track_id": provider_track_id,
+                "url": stream_url,
+                "title": title,
+                "artist": artist,
+                "duration_seconds": int(duration) if duration else None,
+                "thumbnail_url": thumbnail,
+                "mime_type": info.get("acodec") or info.get("ext") or "audio/mp4",
+            }
+
     def _get_metadata_sync(self, provider_track_id: str, songs_only: bool = True) -> ProviderTrack:
         url = f"https://www.youtube.com/watch?v={provider_track_id}"
 

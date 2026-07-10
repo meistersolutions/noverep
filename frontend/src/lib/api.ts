@@ -234,6 +234,21 @@ export const api = {
     if (args.duration_seconds != null) params.set('duration_seconds', String(args.duration_seconds));
     return request<TrackLyrics | null>(`/tracks/lyrics?${params}`);
   },
+  getAudioStream: (provider: string, providerTrackId: string) =>
+    request<{
+      provider: string;
+      provider_track_id: string;
+      url: string;
+      title: string;
+      artist: string;
+      duration_seconds: number | null;
+      thumbnail_url: string | null;
+      mime_type: string | null;
+    }>(
+      `/tracks/audio-stream?provider=${encodeURIComponent(provider)}&provider_track_id=${encodeURIComponent(providerTrackId)}`,
+      {},
+      90_000,
+    ),
   addToQueue: (
     provider: string,
     provider_track_id: string,

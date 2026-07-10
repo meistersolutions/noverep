@@ -1,6 +1,17 @@
 /** Singleton YouTube IFrame player – survives React re-renders. */
 
-import { isMobileBrowser } from '@/lib/nativePlatform';
+import { isAndroidNative, isMobileBrowser } from '@/lib/nativePlatform';
+import {
+  getNativeAudioStatus,
+  getNativeAudioVideoId,
+  isNativeAudioActive,
+  pauseNativeAudio,
+  playNativeAudio,
+  resumeNativeAudio,
+  seekNativeAudio,
+  stopNativeAudio,
+} from '@/lib/nativeBackgroundAudio';
+import { usePlayerStore } from '@/stores/playerStore';
 
 export interface YTPlayerInstance {
   loadVideoById: (videoId: string) => void;
@@ -273,8 +284,19 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
   }
 
   if (state === YT_PAUSED) {
+    // System/background pauses must not clear "want playing" — keep retrying.
     if (allowAutoResume && wantPlaying) {
       attemptPlay(activeVideoId ?? '');
+      const videoId = activeVideoId;
+      const generation = playbackGeneration;
+      [120, 400, 1000, 2000, 4000].forEach((ms) => {
+        setTimeout(() => {
+          if (generation !== playbackGeneration) return;
+          if (!allowAutoResume || !wantPlaying) return;
+          attemptPlay(videoId ?? '', generation);
+        }, ms);
+      });
+      // Do not notify UI as paused while we still intend to play (screen-off case).
       return;
     }
     onPlayingChange?.(false);
@@ -308,6 +330,24 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
 }
 
 export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
+  // Android app: NewPipe-style ExoPlayer stream (survives screen-off).
+  if (isAndroidNative()) {
+    const track = usePlayerStore.getState().currentTrack;
+    playbackGeneration += 1;
+    wantPlaying = true;
+    allowAutoResume = true;
+    activeVideoId = videoId;
+    prefetchedVideoId = null;
+    notifyActiveVideo(videoId);
+    onPlayingChange?.(true);
+    await playNativeAudio({
+      videoId,
+      title: track?.title,
+      artist: track?.artist,
+    });
+    return;
+  }
+
   ensureYouTubeApiScript();
   await waitForYouTubeApi();
   await waitForPlayer(isMobileBrowser() ? 25000 : 30000);
@@ -339,22 +379,55 @@ export function pausePlayback() {
   wantPlaying = false;
   allowAutoResume = false;
   playbackGeneration += 1;
+  if (isAndroidNative()) {
+    void pauseNativeAudio();
+    onPlayingChange?.(false);
+    return;
+  }
   player?.pauseVideo();
 }
 
 export function resumePlayback() {
-  if (!player || !activeVideoId) return;
   wantPlaying = true;
   allowAutoResume = true;
+  if (isAndroidNative()) {
+    void resumeNativeAudio();
+    onPlayingChange?.(true);
+    return;
+  }
+  if (!player || !activeVideoId) return;
   const state = player.getPlayerState?.();
   if (state === YT_PLAYING) return;
   player.playVideo();
 }
 
 export function seekPlayback(seconds: number) {
+  if (isAndroidNative()) {
+    void seekNativeAudio(seconds);
+    return;
+  }
   player?.seekTo(seconds, true);
 }
 
 export function setVolumeLevel(volume: number) {
   player?.setVolume(volume);
 }
+
+/** Poll native ExoPlayer clock into the web UI (Android only). */
+export async function syncNativePlaybackClock(
+  setCurrentTime: (t: number) => void,
+  setDuration: (d: number) => void,
+): Promise<void> {
+  if (!isAndroidNative() || !isNativeAudioActive()) return;
+  const status = await getNativeAudioStatus();
+  if (!status) return;
+  if (Number.isFinite(status.position)) setCurrentTime(status.position);
+  if (status.duration > 0) setDuration(status.duration);
+  const id = getNativeAudioVideoId();
+  if (id) notifyActiveVideo(id);
+}
+
+export async function teardownNativePlayback(): Promise<void> {
+  await stopNativeAudio();
+}
+

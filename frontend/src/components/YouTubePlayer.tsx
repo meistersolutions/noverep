@@ -11,9 +11,11 @@ import {
   setWantPlaying,
   warmUpPlayback,
   waitForYouTubeApi,
+  syncNativePlaybackClock,
 } from '@/lib/youtubePlayerController';
 import { updateMediaSession, setupMediaSessionHandlers } from '@/lib/mediaSession';
 import { initBackgroundPlayback, onPlaybackStateChange } from '@/lib/backgroundPlayback';
+import { isAndroidNative } from '@/lib/nativePlatform';
 
 const CONTAINER_ID = 'noverep-yt-player';
 
@@ -141,6 +143,10 @@ export function YouTubePlayer() {
 
   useEffect(() => {
     const id = window.setInterval(() => {
+      if (isAndroidNative()) {
+        void syncNativePlaybackClock(setCurrentTime, setDuration);
+        return;
+      }
       const p = getPlayer();
       if (!p?.getCurrentTime) return;
       const t = p.getCurrentTime();
