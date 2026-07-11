@@ -18,8 +18,15 @@ import {
   readCachedPreferences,
   writeCachedPreferences,
 } from '@/lib/preferencesCache';
+import {
+  clearSessionContentCaches,
+  readCachedQueue,
+  writeCachedQueue,
+} from '@/lib/sessionMemoryCache';
 import toast from 'react-hot-toast';
+
 const cachedPreferences = readCachedPreferences();
+const cachedQueueSnapshot = readCachedQueue();
 const hasStoredToken = !!localStorage.getItem('noverep_token');
 
 let advancingNext = false;
@@ -247,6 +254,13 @@ interface PlayerState {
   bumpHistory: () => void;
   recordCurrentPlayback: (skipped?: boolean) => Promise<void>;
   syncToActiveVideo: (videoId: string) => void;
+  adoptNativeTrackChange: (args: {
+    videoId: string;
+    title?: string;
+    artist?: string;
+    queueItemId?: string;
+    reason?: string;
+  }) => Promise<void>;
   syncFromPlayer: () => void;
 }
 
@@ -255,21 +269,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   username: localStorage.getItem('noverep_username'),
   isGuest: localStorage.getItem('noverep_guest') === 'true',
   sessionId: ensureSessionId(),
-  currentTrack: null,
-  queue: [],
+  currentTrack: cachedQueueSnapshot?.currentTrack ?? null,
+  queue: cachedQueueSnapshot?.queue ?? [],
   isPlaying: false,
   volume: 0.8,
   shuffle: cachedPreferences?.shuffle ?? false,
   autoplay: cachedPreferences?.autoplay ?? true,
   currentTime: 0,
-  duration: 0,
+  duration: cachedQueueSnapshot?.currentTrack?.duration_seconds ?? 0,
   preferences: cachedPreferences,
   initialized: hasStoredToken && !!cachedPreferences,
   historyVersion: 0,
   queueBuilding: false,
   isAdmin: false,
-  playbackMode: cachedPreferences?.playback_mode || 'discovery',
-  activePlaylistId: cachedPreferences?.active_playlist_id ?? null,
+  playbackMode: cachedQueueSnapshot?.playbackMode || cachedPreferences?.playback_mode || 'discovery',
+  activePlaylistId:
+    cachedQueueSnapshot?.activePlaylistId ?? cachedPreferences?.active_playlist_id ?? null,
 
   setAuth: (token, username, isGuest) => {
     localStorage.setItem('noverep_token', token);
@@ -284,6 +299,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     localStorage.removeItem('noverep_guest');
     localStorage.removeItem('noverep_display_name');
     clearCachedPreferences();
+    clearSessionContentCaches();
     set({
       token: null,
       username: null,
@@ -409,28 +425,33 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (get().playbackMode === 'playlist') return;
     const queue = await api.refreshQueue(query, options);
     const { currentTrack, isPlaying } = get();
+    const preferences = get().preferences
+      ? { ...get().preferences!, active_search_query: query.trim() }
+      : get().preferences;
     set({
       ...applyQueueSnapshot(queue, currentTrack, isPlaying),
-      preferences: get().preferences
-        ? { ...get().preferences!, active_search_query: query.trim() }
-        : get().preferences,
+      preferences,
     });
+    if (preferences) writeCachedPreferences(preferences);
   },
 
   refreshQueueFromPreferences: async (options?) => {
     if (get().playbackMode === 'playlist') return;
     const queue = await api.refreshQueueFromPreferences(options);
     const { currentTrack, isPlaying } = get();
+    const preferences = get().preferences
+      ? { ...get().preferences!, active_search_query: null }
+      : get().preferences;
     set({
       ...applyQueueSnapshot(queue, currentTrack, isPlaying),
-      preferences: get().preferences
-        ? { ...get().preferences!, active_search_query: null }
-        : get().preferences,
+      preferences,
     });
+    if (preferences) writeCachedPreferences(preferences);
   },
 
   clearActiveSearchQuery: async () => {
     const preferences = await api.clearActiveSearch();
+    writeCachedPreferences(preferences);
     set({ preferences });
   },
 
@@ -468,6 +489,96 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         queue: alignQueueWithCurrentTrack(queue, match),
       });
     }
+  },
+
+  /** Native ExoPlayer already switched tracks — update UI/API without calling loadAndPlay. */
+  adoptNativeTrackChange: async ({ videoId, title, artist, queueItemId, reason }) => {
+    const { queue, sessionId } = get();
+    const { setActiveVideoIdFromNative } = await import('@/lib/youtubePlayerController');
+    setActiveVideoIdFromNative(videoId);
+
+    let match =
+      (queueItemId ? queue.find((q) => q.id === queueItemId) : undefined) ||
+      queue.find((q) => q.provider_track_id === videoId);
+
+    if (!match) {
+      match = {
+        id: queueItemId || videoId,
+        provider: 'youtube',
+        provider_track_id: videoId,
+        title: title || 'Unknown',
+        artist: artist || 'Unknown',
+        album: null,
+        duration_seconds: null,
+        thumbnail_url: null,
+        position: 0,
+        is_current: true,
+      } as QueueItem;
+    } else {
+      // Queue metadata is authoritative; only fill blanks from native MediaSession.
+      const needsTitle = !match.title || match.title === 'Unknown' || match.title === 'NoRepeat';
+      const needsArtist = !match.artist || match.artist === 'Unknown' || match.artist === 'Playing';
+      if ((needsTitle && title) || (needsArtist && artist)) {
+        match = {
+          ...match,
+          title: needsTitle && title ? title : match.title,
+          artist: needsArtist && artist ? artist : match.artist,
+        };
+      }
+    }
+
+    setWantPlaying(true);
+    set({
+      currentTrack: match,
+      queue: alignQueueWithCurrentTrack(queue, match),
+      isPlaying: true,
+      currentTime: 0,
+      duration: match.duration_seconds ?? 0,
+    });
+
+    try {
+      // Align server current to the video native already started — never blind nextTrack.
+      if (queueItemId && queue.some((q) => q.id === queueItemId)) {
+        await api.playQueueItem(queueItemId);
+      } else {
+        // Best-effort: play by adding/setting via queue item if we can find it after refresh.
+        const serverQueue = await api.getQueue().catch(() => null);
+        const byVideo = serverQueue?.find((q) => q.provider_track_id === videoId);
+        if (byVideo) {
+          await api.playQueueItem(byVideo.id).catch(() => null);
+        }
+      }
+
+      const serverQueue = await api.getQueue().catch(() => null);
+      if (serverQueue?.length) {
+        const serverMatch = serverQueue.find((q) => q.provider_track_id === videoId);
+        if (serverMatch) {
+          set({
+            currentTrack: serverMatch,
+            queue: alignQueueWithCurrentTrack(serverQueue, serverMatch),
+            duration: serverMatch.duration_seconds ?? get().duration,
+          });
+        } else {
+          // Keep optimistic currentTrack; only refresh the list around it.
+          set({
+            queue: alignQueueWithCurrentTrack(serverQueue, get().currentTrack),
+          });
+        }
+      }
+
+      void recordPlayStart(
+        get().currentTrack!,
+        sessionId,
+        reason === 'next' || reason === 'previous',
+      ).catch(() => {});
+      get().bumpHistory();
+    } catch {
+      /* native audio already playing */
+    }
+
+    void import('@/lib/nativeBackgroundAudio').then(({ syncNativePlaybackQueue }) =>
+      syncNativePlaybackQueue(),
+    );
   },
 
   syncFromPlayer: () => {
@@ -817,6 +928,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (get().currentTrack && !isPlaying) {
       void cueVideoForResume(get().currentTrack!.provider_track_id, volume * 100);
     }
+
+    void import('@/lib/nativeBackgroundAudio').then(({ syncNativePlaybackQueue }) =>
+      syncNativePlaybackQueue(),
+    );
   },
 
   loadPreferences: async () => {
@@ -831,3 +946,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
 }));
+
+// Persist last queue/session so Home/Queue open instantly next launch.
+usePlayerStore.subscribe((state, prev) => {
+  if (!state.token) return;
+  if (state.queue === prev.queue && state.currentTrack === prev.currentTrack) return;
+  writeCachedQueue({
+    queue: state.queue,
+    currentTrack: state.currentTrack,
+    playbackMode: state.playbackMode,
+    activePlaylistId: state.activePlaylistId,
+  });
+});

@@ -4,7 +4,10 @@ import {
   pauseNativeAudio,
   stopNativeBackgroundAudio,
   syncNativeBackgroundAudio,
+  noteNativeTrackPlaying,
+  syncNativePlaybackQueue,
 } from '@/lib/nativeBackgroundAudio';
+import { markUsingNativePlayer, setActiveVideoIdFromNative } from '@/lib/youtubePlayerController';
 import { usePlayerStore } from '@/stores/playerStore';
 import toast from 'react-hot-toast';
 
@@ -104,7 +107,14 @@ function bindNativeMediaControls() {
   if (!isAndroidNative() || mediaEventBound) return;
   mediaEventBound = true;
 
-  window.addEventListener('noverep-media', ((event: CustomEvent<{ action: string }>) => {
+  window.addEventListener('noverep-media', ((event: CustomEvent<{
+    action: string;
+    videoId?: string;
+    title?: string;
+    artist?: string;
+    queueItemId?: string;
+    reason?: string;
+  }>) => {
     const action = event.detail?.action;
     const store = usePlayerStore.getState();
     if (action === 'play') store.setPlaying(true);
@@ -123,6 +133,22 @@ function bindNativeMediaControls() {
     }
     if (action === 'ended') {
       void store.next(false);
+    }
+    if (action === 'track-changed' && event.detail?.videoId) {
+      // Native already started the next/prev stream — only sync JS state + API.
+      // Await adopt first so syncNativePlaybackQueue pins the new videoId (not the old one).
+      noteNativeTrackPlaying(event.detail.videoId);
+      setActiveVideoIdFromNative(event.detail.videoId);
+      markUsingNativePlayer(true);
+      void store
+        .adoptNativeTrackChange({
+          videoId: event.detail.videoId,
+          title: event.detail.title,
+          artist: event.detail.artist,
+          queueItemId: event.detail.queueItemId,
+          reason: event.detail.reason || 'next',
+        })
+        .then(() => syncNativePlaybackQueue());
     }
     if (action === 'error') {
       toast.error('Playback failed — try another song');

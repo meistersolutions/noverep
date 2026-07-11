@@ -498,6 +498,9 @@ async def track_lyrics(
         lyrics_album,
         duration_seconds,
     )
+    if not result and (lyrics_title != title or lyrics_artist != artist):
+        # Enriched names sometimes diverge from catalog titles — retry raw metadata.
+        result = await lyrics_svc.fetch_lyrics(title, artist, album, duration_seconds)
     if not result:
         raise HTTPException(status_code=404, detail="Lyrics not found")
 

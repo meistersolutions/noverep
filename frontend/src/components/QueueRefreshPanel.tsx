@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, Filter, Loader2, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Filter, Loader2, RefreshCw, X } from 'lucide-react';
 import { LanguageMultiSelect } from '@/components/LanguageMultiSelect';
 import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
 import { effectiveLanguages } from '@/lib/languages';
@@ -25,6 +25,7 @@ export function QueueRefreshPanel({
   const [languages, setLanguages] = useState<string[]>([]);
   const [yearFrom, setYearFrom] = useState<number | null>(null);
   const [yearTo, setYearTo] = useState<number | null>(null);
+  const lastHydratedSeed = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     if (!preferences) return;
@@ -33,11 +34,13 @@ export function QueueRefreshPanel({
     setYearTo(preferences.discovery_year_to);
   }, [preferences]);
 
+  // Hydrate the input when the saved seed changes — do NOT re-fill when the user clears the field.
   useEffect(() => {
-    if (activeSearch && !query) {
-      onQueryChange(activeSearch);
-    }
-  }, [activeSearch, onQueryChange, query]);
+    const seed = activeSearch ?? null;
+    if (seed === lastHydratedSeed.current) return;
+    lastHydratedSeed.current = seed;
+    if (seed) onQueryChange(seed);
+  }, [activeSearch, onQueryChange]);
 
   const buildOptions = (): QueueRefreshOptions => ({
     languages,
@@ -48,6 +51,8 @@ export function QueueRefreshPanel({
   const handleRefresh = async () => {
     await onRefresh(query.trim() || null, buildOptions());
   };
+
+  const clearQuery = () => onQueryChange('');
 
   if (!preferences) {
     return <div className="glass h-32 animate-pulse rounded-xl" />;
@@ -62,13 +67,27 @@ export function QueueRefreshPanel({
           saved preferences. To replay a favorite song, use Search instead.
         </p>
         <div className="flex gap-2">
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            placeholder="e.g. Ilaiyaraaja, rock 90s… (optional)"
-            className="flex-1 bg-surface-raised border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
-          />
+          <div className="relative flex-1 min-w-0">
+            <input
+              type="text"
+              inputMode="search"
+              enterKeyHint="search"
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="e.g. Ilaiyaraaja, rock 90s… (optional)"
+              className="w-full bg-surface-raised border border-white/10 rounded-lg px-4 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+            />
+            {query ? (
+              <button
+                type="button"
+                onClick={clearQuery}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10"
+                aria-label="Clear search"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={handleRefresh}

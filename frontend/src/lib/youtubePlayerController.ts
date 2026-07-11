@@ -20,6 +20,17 @@ export function isUsingNativePlayer(): boolean {
   return usingNativePlayer;
 }
 
+export function markUsingNativePlayer(active: boolean): void {
+  usingNativePlayer = active;
+}
+
+/** Keep controller + UI in sync when ExoPlayer advances without loadAndPlay. */
+export function setActiveVideoIdFromNative(videoId: string): void {
+  if (!videoId) return;
+  usingNativePlayer = true;
+  notifyActiveVideo(videoId);
+}
+
 export interface YTPlayerInstance {
   loadVideoById: (videoId: string) => void;
   cueVideoById: (videoId: string) => void;
@@ -176,6 +187,11 @@ export function getPlayer(): YTPlayerInstance | null {
 }
 
 export function getActiveVideoId(): string | null {
+  // Android ExoPlayer is authoritative when native playback is active.
+  if (usingNativePlayer) {
+    const nativeId = getNativeAudioVideoId();
+    if (nativeId) return nativeId;
+  }
   if (!player?.getVideoData) return activeVideoId;
   try {
     const id = player.getVideoData()?.video_id;
@@ -368,7 +384,7 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
         const msg = err instanceof Error ? err.message : 'stream unavailable';
         const short =
           /bot|sign in/i.test(msg)
-            ? 'YouTube blocked server stream (need API cookies) — playing in-app only'
+            ? 'Could not extract audio stream — playing in-app only'
             : `In-app only: ${msg}`;
         toast(short, { icon: '⚠️', duration: 6000 });
       } catch {

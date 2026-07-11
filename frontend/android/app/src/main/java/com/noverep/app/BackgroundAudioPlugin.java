@@ -4,15 +4,82 @@ import android.content.Intent;
 import android.os.Build;
 import android.util.Log;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 @CapacitorPlugin(name = "BackgroundAudio")
 public class BackgroundAudioPlugin extends Plugin {
     private static final String TAG = "BackgroundAudio";
+    private final ExecutorService extractorExecutor = Executors.newSingleThreadExecutor();
+
+    @PluginMethod
+    public void syncQueue(PluginCall call) {
+        try {
+            JSArray raw = call.getArray("items");
+            String currentVideoId = call.getString("currentVideoId", "");
+            List<PlaybackQueueStore.Item> items = new ArrayList<>();
+            if (raw != null) {
+                JSONArray arr = raw;
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    String videoId = obj.optString("videoId", "");
+                    if (videoId.isEmpty()) continue;
+                    items.add(new PlaybackQueueStore.Item(
+                        videoId,
+                        obj.optString("title", "NoRepeat"),
+                        obj.optString("artist", "Playing"),
+                        obj.optString("queueItemId", "")
+                    ));
+                }
+            }
+            PlaybackQueueStore.setQueue(items, currentVideoId);
+            Log.i(TAG, "syncQueue size=" + items.size() + " current=" + currentVideoId);
+            call.resolve();
+        } catch (Exception e) {
+            Log.e(TAG, "syncQueue failed", e);
+            call.reject("syncQueue failed: " + e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
+    public void resolveAudioStream(PluginCall call) {
+        String videoId = call.getString("videoId");
+        if (videoId == null || videoId.isEmpty()) {
+            call.reject("videoId is required");
+            return;
+        }
+
+        extractorExecutor.execute(() -> {
+            try {
+                YoutubeStreamExtractor.Result result = YoutubeStreamExtractor.resolve(videoId);
+                JSObject out = new JSObject();
+                out.put("url", result.url);
+                out.put("title", result.title);
+                out.put("artist", result.artist);
+                out.put("duration_seconds", result.durationSeconds);
+                out.put("mime_type", result.mimeType);
+                if (result.headersJson != null) {
+                    out.put("headersJson", result.headersJson);
+                }
+                call.resolve(out);
+            } catch (Exception e) {
+                Log.e(TAG, "resolveAudioStream failed", e);
+                call.reject("Client extract failed: " + e.getMessage(), e);
+            }
+        });
+    }
 
     @PluginMethod
     public void playStream(PluginCall call) {
@@ -23,12 +90,19 @@ public class BackgroundAudioPlugin extends Plugin {
         }
         String title = call.getString("title", "NoRepeat");
         String artist = call.getString("artist", "Playing");
+        String videoId = call.getString("videoId", "");
+        if (videoId != null && !videoId.isEmpty()) {
+            PlaybackQueueStore.markCurrent(videoId);
+        }
 
         Intent intent = new Intent(getContext(), MediaPlaybackService.class);
         intent.setAction(MediaPlaybackService.ACTION_PLAY);
         intent.putExtra(MediaPlaybackService.EXTRA_URL, url);
         intent.putExtra(MediaPlaybackService.EXTRA_TITLE, title);
         intent.putExtra(MediaPlaybackService.EXTRA_ARTIST, artist);
+        if (videoId != null && !videoId.isEmpty()) {
+            intent.putExtra(MediaPlaybackService.EXTRA_VIDEO_ID, videoId);
+        }
 
         String headersJson = call.getString("headersJson");
         if (headersJson == null || headersJson.isEmpty()) {
@@ -117,7 +191,6 @@ public class BackgroundAudioPlugin extends Plugin {
         call.resolve(status);
     }
 
-    // Kept for older JS callers; maps to playStream metadata-only no-op if no url.
     @PluginMethod
     public void start(PluginCall call) {
         call.resolve();

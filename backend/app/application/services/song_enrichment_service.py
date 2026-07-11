@@ -20,6 +20,7 @@ from app.application.services.song_matcher import (
 )
 from app.domain.entities import ProviderTrack
 from app.infrastructure.database.models import ArtistModel, SongModel
+from app.infrastructure.external.itunes_client import ITunesClient
 from app.infrastructure.external.musicbrainz_client import (
     COMPOSER_REL_TYPES,
     LYRICIST_REL_TYPES,
@@ -212,8 +213,9 @@ def _pick_best_recording(
 
 
 class SongEnrichmentService:
-    def __init__(self, client: MusicBrainzClient):
+    def __init__(self, client: MusicBrainzClient, itunes: ITunesClient | None = None):
         self.client = client
+        self.itunes = itunes or ITunesClient()
 
     async def enrich_track(self, track: ProviderTrack) -> SongEnrichment | None:
         core_title = extract_core_title(track.title, track.artist)
@@ -240,24 +242,76 @@ class SongEnrichmentService:
             )
         if not candidates:
             candidates = await self.client.search_recording(core_title, None, track.duration_seconds)
-        if not candidates:
+
+        if candidates:
+            picked = _pick_best_recording(
+                candidates,
+                core_title,
+                track.artist,
+                track.duration_seconds,
+                movie_hint,
+            )
+            if picked and picked.get("id"):
+                recording = await self.client.lookup_recording(picked["id"])
+                if recording:
+                    return await self._parse_recording(recording)
+
+        # MusicBrainz often misses regional / film music — try iTunes catalog.
+        return await self._enrich_from_itunes(track, core_title, movie_hint)
+
+    async def _enrich_from_itunes(
+        self,
+        track: ProviderTrack,
+        core_title: str,
+        movie_hint: str | None,
+    ) -> SongEnrichment | None:
+        results = await self.itunes.search_song(core_title, track.artist)
+        if not results and movie_hint:
+            results = await self.itunes.search_song(core_title, movie_hint)
+        if not results:
+            results = await self.itunes.search_song(core_title, None)
+        if not results:
             return None
 
-        picked = _pick_best_recording(
-            candidates,
-            core_title,
-            track.artist,
-            track.duration_seconds,
-            movie_hint,
+        best: dict[str, Any] | None = None
+        best_score = 0.0
+        for item in results:
+            cand_title = (item.get("trackName") or "").strip()
+            cand_artist = (item.get("artistName") or "").strip()
+            duration_ms = item.get("trackTimeMillis")
+            duration_sec = int(duration_ms / 1000) if isinstance(duration_ms, (int, float)) else None
+            score = match_score(
+                core_title,
+                track.artist,
+                track.duration_seconds,
+                cand_title,
+                cand_artist,
+                duration_sec,
+            )
+            album = (item.get("collectionName") or "").strip()
+            if movie_hint and album:
+                from app.application.services.song_matcher import title_similarity as _ts
+
+                score += 0.08 * _ts(movie_hint, album)
+            if score > best_score:
+                best_score = score
+                best = item
+
+        if not best or best_score < 0.7:
+            return None
+
+        year = _parse_year(best.get("releaseDate"))
+        artist_name = (best.get("artistName") or "").strip()
+        return SongEnrichment(
+            musicbrainz_id=None,
+            song_name=(best.get("trackName") or "").strip() or None,
+            composed_by=[],
+            lyricist_by=[],
+            performed_by=[artist_name] if artist_name else [],
+            movie_name=(best.get("collectionName") or "").strip() or None,
+            release_year=year,
+            source="itunes",
         )
-        if not picked or not picked.get("id"):
-            return None
-
-        recording = await self.client.lookup_recording(picked["id"])
-        if not recording:
-            return None
-
-        return await self._parse_recording(recording)
 
     async def _parse_recording(self, recording: dict[str, Any]) -> SongEnrichment:
         mbid = recording.get("id")
@@ -306,7 +360,7 @@ class SongEnrichmentService:
         song: SongModel,
         track: ProviderTrack,
     ) -> SongEnrichment | None:
-        if song.enrichment_metadata and song.musicbrainz_id:
+        if song.enrichment_metadata:
             cached = SongEnrichment.from_dict(song.enrichment_metadata)
             if cached and _enrichment_matches_track(cached, track):
                 return cached
@@ -314,19 +368,20 @@ class SongEnrichmentService:
             song.musicbrainz_id = None
 
         enrichment = await self.enrich_track(track)
-        if not enrichment or not enrichment.musicbrainz_id:
+        if not enrichment or not enrichment.song_name:
             return None
 
-        existing = await session.execute(
-            select(SongModel).where(SongModel.musicbrainz_id == enrichment.musicbrainz_id)
-        )
-        duplicate = existing.scalar_one_or_none()
-        if duplicate and duplicate.id != song.id:
-            dup_cached = SongEnrichment.from_dict(duplicate.enrichment_metadata)
-            if dup_cached and _enrichment_matches_track(dup_cached, track):
-                return dup_cached
+        if enrichment.musicbrainz_id:
+            existing = await session.execute(
+                select(SongModel).where(SongModel.musicbrainz_id == enrichment.musicbrainz_id)
+            )
+            duplicate = existing.scalar_one_or_none()
+            if duplicate and duplicate.id != song.id:
+                dup_cached = SongEnrichment.from_dict(duplicate.enrichment_metadata)
+                if dup_cached and _enrichment_matches_track(dup_cached, track):
+                    return dup_cached
+            song.musicbrainz_id = enrichment.musicbrainz_id
 
-        song.musicbrainz_id = enrichment.musicbrainz_id
         song.enrichment_metadata = enrichment.to_dict()
         if enrichment.song_name and enrichment.song_name.strip():
             song.title = enrichment.song_name.strip()
@@ -338,6 +393,7 @@ class SongEnrichmentService:
             "song_enriched",
             song_id=str(song.id),
             musicbrainz_id=enrichment.musicbrainz_id,
+            source=enrichment.source,
             movie=enrichment.movie_name,
         )
         return enrichment

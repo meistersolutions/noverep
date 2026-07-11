@@ -13,6 +13,7 @@ export default function HomePage() {
   const navigate = useNavigate();
   const sections = useHomeStore((s) => s.sections);
   const loading = useHomeStore((s) => s.loading);
+  const refreshing = useHomeStore((s) => s.refreshing);
   const loadHome = useHomeStore((s) => s.load);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const playNextInsert = usePlayerStore((s) => s.playNextInsert);
@@ -24,10 +25,12 @@ export default function HomePage() {
     : null;
 
   useEffect(() => {
-    loadHome(false);
+    // Show cached discovery immediately; refresh quietly in the background.
+    void loadHome(false);
   }, [loadHome]);
 
-  const handleRefresh = () => loadHome(true);
+  const handleRefresh = () => void loadHome(true);
+  const busy = loading || refreshing;
 
   const handlePlay = async (track: Track) => {
     try {
@@ -72,11 +75,14 @@ export default function HomePage() {
           <button
             className="btn-primary flex items-center gap-2 text-sm sm:text-base"
             onClick={handleRefresh}
-            disabled={loading}
+            disabled={busy}
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} />
             Refresh
           </button>
+          {refreshing && sections.length > 0 && (
+            <p className="text-xs text-white/40 mt-2">Updating discovery in the background…</p>
+          )}
         </div>
       </section>
 

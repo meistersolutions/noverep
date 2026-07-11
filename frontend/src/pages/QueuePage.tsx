@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { MobileHeader } from '@/components/MobileHeader';
@@ -13,7 +13,13 @@ export default function QueuePage() {
   const refreshQueueFromSearch = usePlayerStore((s) => s.refreshQueueFromSearch);
   const refreshQueueFromPreferences = usePlayerStore((s) => s.refreshQueueFromPreferences);
   const clearActiveSearchQuery = usePlayerStore((s) => s.clearActiveSearchQuery);
+  const refreshQueueInBackground = usePlayerStore((s) => s.refreshQueueInBackground);
   const queueBuilding = usePlayerStore((s) => s.queueBuilding);
+
+  useEffect(() => {
+    // Cached queue is already in the store; reconcile with server in the background.
+    void refreshQueueInBackground();
+  }, [refreshQueueInBackground]);
 
   const handleRefresh = async (seed: string | null, options: QueueRefreshOptions) => {
     if (usePlayerStore.getState().playbackMode === 'playlist') {

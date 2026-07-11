@@ -112,9 +112,13 @@ export function LyricsPanel({ track }: LyricsPanelProps) {
         setSynced(data.synced);
         setInstrumental(data.instrumental);
         setMissing(false);
-      } catch {
+      } catch (err) {
         if (!cancelled) {
-          setCachedTrackLyrics(cacheKey, 'missing');
+          const msg = err instanceof Error ? err.message : String(err);
+          // Only cache permanent misses — transient API/network errors should retry next open.
+          if (/not found|404/i.test(msg)) {
+            setCachedTrackLyrics(cacheKey, 'missing');
+          }
           setMissing(true);
           setLines([]);
         }

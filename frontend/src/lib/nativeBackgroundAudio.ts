@@ -2,11 +2,26 @@ import { registerPlugin } from '@capacitor/core';
 import { isAndroidNative } from '@/lib/nativePlatform';
 import { api } from '@/lib/api';
 
+interface ResolvedAudioStream {
+  url: string;
+  title?: string;
+  artist?: string;
+  duration_seconds?: number;
+  mime_type?: string;
+  headersJson?: string;
+}
+
 interface BackgroundAudioPlugin {
+  syncQueue(options: {
+    items: Array<{ videoId: string; title?: string; artist?: string; queueItemId?: string }>;
+    currentVideoId?: string;
+  }): Promise<void>;
+  resolveAudioStream(options: { videoId: string }): Promise<ResolvedAudioStream>;
   playStream(options: {
     url: string;
     title?: string;
     artist?: string;
+    videoId?: string;
     headers?: Record<string, string>;
     headersJson?: string;
   }): Promise<void>;
@@ -32,31 +47,62 @@ export function getNativeAudioVideoId(): string | null {
   return activeVideoId;
 }
 
-/** NewPipe-style: resolve stream URL then play with ExoPlayer foreground service. */
+async function resolveStreamOnDevice(videoId: string): Promise<ResolvedAudioStream> {
+  return BackgroundAudio.resolveAudioStream({ videoId });
+}
+
+async function resolveStreamOnServer(videoId: string): Promise<ResolvedAudioStream> {
+  const stream = await api.getAudioStream('youtube', videoId);
+  return {
+    url: stream.url,
+    title: stream.title,
+    artist: stream.artist,
+    duration_seconds: stream.duration_seconds ?? undefined,
+    mime_type: stream.mime_type ?? undefined,
+    headersJson: stream.http_headers ? JSON.stringify(stream.http_headers) : undefined,
+  };
+}
+
+function assertPlayableUrl(url: string): void {
+  if (!url) throw new Error('No audio stream URL');
+  const lower = url.toLowerCase();
+  if (lower.includes('storyboard') || lower.includes('ytimg.com/sb/') || lower.includes('i.ytimg.com')) {
+    throw new Error('Resolved a non-audio URL');
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error('Invalid stream URL scheme');
+  }
+}
+
+/** NewPipe-style: extract on-device, then play with ExoPlayer (server API is fallback only). */
 export async function playNativeAudio(options: {
   videoId: string;
   title?: string;
   artist?: string;
 }): Promise<void> {
   if (!isAndroidNative()) return;
-  let stream;
+
+  let stream: ResolvedAudioStream | null = null;
+  let lastError: unknown = null;
+
   try {
-    stream = await api.getAudioStream('youtube', options.videoId);
+    stream = await resolveStreamOnDevice(options.videoId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Stream API failed: ${msg}`);
+    lastError = err;
+    console.warn('[noverep] on-device extract failed, trying server API', err);
+    try {
+      stream = await resolveStreamOnServer(options.videoId);
+    } catch (serverErr) {
+      const deviceMsg = err instanceof Error ? err.message : String(err);
+      const serverMsg = serverErr instanceof Error ? serverErr.message : String(serverErr);
+      throw new Error(`Extract failed (device: ${deviceMsg}; server: ${serverMsg})`);
+    }
   }
-  if (!stream?.url) {
-    throw new Error('No audio stream URL');
+
+  if (!stream) {
+    throw new Error(lastError instanceof Error ? lastError.message : 'No audio stream');
   }
-  const lower = stream.url.toLowerCase();
-  // Only reject obvious non-media hosts (avoid false positives on googlevideo query strings).
-  if (lower.includes('storyboard') || lower.includes('ytimg.com/sb/') || lower.includes('i.ytimg.com')) {
-    throw new Error('Server returned a non-audio URL');
-  }
-  if (!/^https?:\/\//i.test(stream.url)) {
-    throw new Error('Invalid stream URL scheme');
-  }
+  assertPlayableUrl(stream.url);
 
   activeVideoId = options.videoId;
   wantPlaying = true;
@@ -65,15 +111,65 @@ export async function playNativeAudio(options: {
       url: stream.url,
       title: options.title || stream.title || 'NoRepeat',
       artist: options.artist || stream.artist || 'Playing',
-      // Pass as JSON string — more reliable across the Capacitor bridge than nested objects.
-      headersJson: stream.http_headers ? JSON.stringify(stream.http_headers) : undefined,
+      videoId: options.videoId,
+      headersJson: stream.headersJson,
     });
+    void syncNativePlaybackQueue();
   } catch (err) {
     activeVideoId = null;
     wantPlaying = false;
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`ExoPlayer start failed: ${msg}`);
   }
+}
+
+/** Push current + upcoming queue to native so skip/auto-next work with WebView suspended. */
+export async function syncNativePlaybackQueue(): Promise<void> {
+  if (!isAndroidNative()) return;
+  try {
+    const { usePlayerStore } = await import('@/stores/playerStore');
+    const { queue, currentTrack } = usePlayerStore.getState();
+    // Prefer the ExoPlayer video id — store currentTrack can lag during native skips.
+    const currentId = activeVideoId || currentTrack?.provider_track_id;
+    const items = queue
+      .filter((q) => q.provider_track_id)
+      .map((q) => ({
+        videoId: q.provider_track_id,
+        title: q.title,
+        artist: q.artist,
+        queueItemId: q.id,
+      }));
+
+    // Ensure current track is in the list even if queue is briefly empty/out of sync.
+    if (currentId && !items.some((i) => i.videoId === currentId)) {
+      const meta =
+        currentTrack?.provider_track_id === currentId
+          ? currentTrack
+          : queue.find((q) => q.provider_track_id === currentId);
+      items.unshift({
+        videoId: currentId,
+        title: meta?.title || 'NoRepeat',
+        artist: meta?.artist || 'Playing',
+        queueItemId: meta && 'id' in meta ? String(meta.id) : '',
+      });
+    }
+
+    await BackgroundAudio.syncQueue({
+      items,
+      currentVideoId: currentId || undefined,
+    });
+  } catch (err) {
+    console.warn('[noverep] syncNativePlaybackQueue failed', err);
+  }
+}
+
+export function noteNativeTrackPlaying(videoId: string): void {
+  if (!videoId) return;
+  activeVideoId = videoId;
+  wantPlaying = true;
+  void import('@/lib/youtubePlayerController').then(({ setActiveVideoIdFromNative }) => {
+    setActiveVideoIdFromNative(videoId);
+  });
 }
 
 export async function pauseNativeAudio(): Promise<void> {

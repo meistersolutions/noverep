@@ -21,7 +21,7 @@ from app.application.services.song_matcher import (
 logger = structlog.get_logger()
 
 TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2}(?:\.\d{1,3})?)\]")
-LYRICS_MATCH_THRESHOLD = 0.82
+LYRICS_MATCH_THRESHOLD = 0.72
 
 
 @dataclass
@@ -227,7 +227,91 @@ class LyricsService:
             if search_result:
                 return search_result
 
+            # Broader LRCLIB query (title + artist as free text).
+            q_result = await self._search_lyrics_q(core_title, artist_name, duration_seconds, album_hint)
+            if q_result:
+                return q_result
+
+            # Plain-text fallback when synced providers miss (common for regional music).
+            ovh = await self._fetch_lyrics_ovh(core_title, artist_name)
+            if ovh:
+                return ovh
+
         return None
+
+    async def _search_lyrics_q(
+        self,
+        title: str,
+        artist: str,
+        duration_seconds: int | None,
+        album_hint: str | None,
+    ) -> TrackLyrics | None:
+        query = f"{title} {artist}".strip()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"{self.BASE_URL}/search",
+                    params={"q": query},
+                )
+                if response.status_code != 200:
+                    return None
+                items = response.json()
+        except Exception:
+            return None
+
+        if not isinstance(items, list) or not items:
+            return None
+
+        picked = pick_best_lyrics_item(items, title, artist, duration_seconds, album_hint)
+        if not picked:
+            # Accept a looser top hit when duration is close.
+            scored = [
+                (lyrics_item_score(item, title, artist, duration_seconds, album_hint), item)
+                for item in items
+            ]
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            if scored and scored[0][0] >= 0.55:
+                picked = scored[0][1]
+            else:
+                return None
+        return self._parse_payload(picked)
+
+    async def _fetch_lyrics_ovh(self, title: str, artist: str) -> TrackLyrics | None:
+        """Fallback plain lyrics from lyrics.ovh (no sync timestamps)."""
+        if not title or not artist or artist == "Unknown":
+            return None
+        from urllib.parse import quote
+
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"https://api.lyrics.ovh/v1/{quote(artist)}/{quote(title)}",
+                )
+                if response.status_code != 200:
+                    return None
+                data = response.json()
+        except Exception:
+            return None
+
+        plain = (data.get("lyrics") or "").strip() if isinstance(data, dict) else ""
+        if not plain or len(plain) < 40:
+            return None
+
+        lines = [
+            LyricsLine(time_ms=idx * 3000, text=line.strip())
+            for idx, line in enumerate(plain.splitlines())
+            if line.strip() and not line.strip().startswith("Paroles de la chanson")
+        ]
+        if len(lines) < 4:
+            return None
+
+        return TrackLyrics(
+            synced=False,
+            plain=plain,
+            lines=lines,
+            instrumental=False,
+            source="lyrics.ovh",
+        )
 
     async def _request_lyrics(
         self,

@@ -12,11 +12,16 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.support.v4.media.MediaMetadataCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import android.util.Log;
+import android.view.KeyEvent;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.media.app.NotificationCompat.MediaStyle;
+import androidx.media.session.MediaButtonReceiver;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
@@ -35,8 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * NewPipe-style background audio: ExoPlayer + foreground service.
- * Plays a direct audio stream URL (from yt-dlp), not a YouTube WebView iframe.
+ * NewPipe-style background audio: ExoPlayer + foreground service + MediaSession
+ * (car / Bluetooth skip, play, pause).
  */
 public class MediaPlaybackService extends Service {
     private static final String TAG = "NoRepeatPlayback";
@@ -48,6 +53,8 @@ public class MediaPlaybackService extends Service {
     public static final String ACTION_RESUME = "com.noverep.app.RESUME_STREAM";
     public static final String ACTION_STOP = "com.noverep.app.STOP_STREAM";
     public static final String ACTION_SEEK = "com.noverep.app.SEEK_STREAM";
+    public static final String ACTION_SKIP_NEXT = "com.noverep.app.SKIP_NEXT";
+    public static final String ACTION_SKIP_PREV = "com.noverep.app.SKIP_PREV";
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_TITLE = "title";
@@ -61,9 +68,22 @@ public class MediaPlaybackService extends Service {
     public static final String ACTION_JS_PREV = "com.noverep.app.JS_PREV";
     public static final String ACTION_JS_ENDED = "com.noverep.app.JS_ENDED";
     public static final String ACTION_JS_ERROR = "com.noverep.app.JS_ERROR";
+    public static final String ACTION_JS_TRACK_CHANGED = "com.noverep.app.JS_TRACK_CHANGED";
+    public static final String EXTRA_VIDEO_ID = "video_id";
+    public static final String EXTRA_QUEUE_ITEM_ID = "queue_item_id";
+    public static final String EXTRA_REASON = "reason"; // next | previous | ended
 
     private static final String DEFAULT_UA =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+
+    private static final long MEDIA_ACTIONS =
+        PlaybackStateCompat.ACTION_PLAY
+            | PlaybackStateCompat.ACTION_PAUSE
+            | PlaybackStateCompat.ACTION_PLAY_PAUSE
+            | PlaybackStateCompat.ACTION_STOP
+            | PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+            | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+            | PlaybackStateCompat.ACTION_SEEK_TO;
 
     private static ExoPlayer player;
     private static String currentTitle = "NoRepeat";
@@ -71,15 +91,20 @@ public class MediaPlaybackService extends Service {
     private static final AtomicBoolean playingFlag = new AtomicBoolean(false);
     private static final AtomicLong positionMs = new AtomicLong(0);
     private static final AtomicLong durationMs = new AtomicLong(0);
+    private static final AtomicBoolean advancing = new AtomicBoolean(false);
 
     private PowerManager.WakeLock wakeLock;
+    private MediaSessionCompat mediaSession;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final java.util.concurrent.ExecutorService extractExecutor =
+        java.util.concurrent.Executors.newSingleThreadExecutor();
     private final Runnable positionTicker = new Runnable() {
         @Override
         public void run() {
             syncClockFromPlayer();
+            updateMediaSessionState();
             if (playingFlag.get()) {
-                mainHandler.postDelayed(this, 250);
+                mainHandler.postDelayed(this, 500);
             }
         }
     };
@@ -103,16 +128,151 @@ public class MediaPlaybackService extends Service {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "noverep:exo");
         wakeLock.setReferenceCounted(false);
+        initMediaSession();
+    }
+
+    private void initMediaSession() {
+        mediaSession = new MediaSessionCompat(this, "NoRepeat");
+        mediaSession.setFlags(
+            MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+        );
+        mediaSession.setCallback(new MediaSessionCompat.Callback() {
+            @Override
+            public void onPlay() {
+                resumePlayback();
+                sendBroadcast(new Intent(ACTION_JS_PLAY).setPackage(getPackageName()));
+            }
+
+            @Override
+            public void onPause() {
+                pausePlayback();
+                sendBroadcast(new Intent(ACTION_JS_PAUSE).setPackage(getPackageName()));
+            }
+
+            @Override
+            public void onStop() {
+                stopPlayback();
+                stopSelf();
+            }
+
+            @Override
+            public void onSkipToNext() {
+                playAdjacentFromQueue(true, "next");
+            }
+
+            @Override
+            public void onSkipToPrevious() {
+                playAdjacentFromQueue(false, "previous");
+            }
+
+            @Override
+            public void onSeekTo(long pos) {
+                mainHandler.post(() -> {
+                    if (player != null) {
+                        player.seekTo(pos);
+                        positionMs.set(pos);
+                        updateMediaSessionState();
+                    }
+                });
+            }
+
+            @Override
+            public boolean onMediaButtonEvent(Intent mediaButtonEvent) {
+                KeyEvent event = mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+                if (event != null
+                    && event.getAction() == KeyEvent.ACTION_DOWN
+                    && event.getRepeatCount() == 0) {
+                    switch (event.getKeyCode()) {
+                        case KeyEvent.KEYCODE_MEDIA_NEXT:
+                            onSkipToNext();
+                            return true;
+                        case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                            onSkipToPrevious();
+                            return true;
+                        case KeyEvent.KEYCODE_MEDIA_PLAY:
+                            onPlay();
+                            return true;
+                        case KeyEvent.KEYCODE_MEDIA_PAUSE:
+                            onPause();
+                            return true;
+                        case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                        case KeyEvent.KEYCODE_HEADSETHOOK:
+                            if (playingFlag.get()) onPause();
+                            else onPlay();
+                            return true;
+                        default:
+                            break;
+                    }
+                }
+                return super.onMediaButtonEvent(mediaButtonEvent);
+            }
+        });
+
+        Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (launch != null) {
+            PendingIntent pi = PendingIntent.getActivity(
+                this,
+                0,
+                launch,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            );
+            mediaSession.setSessionActivity(pi);
+        }
+
+        Intent mediaButtonIntent = new Intent(Intent.ACTION_MEDIA_BUTTON, null, this, MediaButtonReceiver.class);
+        PendingIntent mbr = PendingIntent.getBroadcast(
+            this,
+            0,
+            mediaButtonIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        mediaSession.setMediaButtonReceiver(mbr);
+
+        mediaSession.setActive(true);
+        updateMediaSessionMetadata();
+        updateMediaSessionState();
+    }
+
+    private void updateMediaSessionMetadata() {
+        if (mediaSession == null) return;
+        MediaMetadataCompat.Builder meta = new MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentArtist)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, currentArtist);
+        long duration = durationMs.get();
+        if (duration > 0) {
+            meta.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration);
+        }
+        mediaSession.setMetadata(meta.build());
+    }
+
+    private void updateMediaSessionState() {
+        if (mediaSession == null) return;
+        int state = playingFlag.get()
+            ? PlaybackStateCompat.STATE_PLAYING
+            : PlaybackStateCompat.STATE_PAUSED;
+        PlaybackStateCompat playbackState = new PlaybackStateCompat.Builder()
+            .setActions(MEDIA_ACTIONS)
+            .setState(state, positionMs.get(), playingFlag.get() ? 1.0f : 0f)
+            .build();
+        mediaSession.setPlaybackState(playbackState);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Must call startForeground promptly on Android 8+.
         promoteForeground();
 
         if (intent == null) {
             return START_STICKY;
         }
+
+        if (Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction())) {
+            MediaButtonReceiver.handleIntent(mediaSession, intent);
+            return START_STICKY;
+        }
+
         String action = intent.getAction();
         if (ACTION_STOP.equals(action)) {
             stopPlayback();
@@ -127,12 +287,21 @@ public class MediaPlaybackService extends Service {
             resumePlayback();
             return START_STICKY;
         }
+        if (ACTION_SKIP_NEXT.equals(action)) {
+            playAdjacentFromQueue(true, "next");
+            return START_STICKY;
+        }
+        if (ACTION_SKIP_PREV.equals(action)) {
+            playAdjacentFromQueue(false, "previous");
+            return START_STICKY;
+        }
         if (ACTION_SEEK.equals(action)) {
             long pos = intent.getLongExtra(EXTRA_POSITION_MS, 0L);
             mainHandler.post(() -> {
                 if (player != null) {
                     player.seekTo(pos);
                     positionMs.set(pos);
+                    updateMediaSessionState();
                 }
             });
             return START_STICKY;
@@ -149,6 +318,60 @@ public class MediaPlaybackService extends Service {
         }
 
         return START_STICKY;
+    }
+
+    private void playAdjacentFromQueue(boolean next, String reason) {
+        if (!advancing.compareAndSet(false, true)) {
+            Log.i(TAG, "Skip ignored — already advancing");
+            return;
+        }
+        extractExecutor.execute(() -> {
+            try {
+                PlaybackQueueStore.Item item = next
+                    ? PlaybackQueueStore.advanceNext()
+                    : PlaybackQueueStore.advancePrevious();
+                if (item == null) {
+                    Log.i(TAG, "No more tracks in native queue (" + reason + ")");
+                    // Fall back to JS so discovery can fetch more.
+                    String fallback = next ? ACTION_JS_NEXT : ACTION_JS_PREV;
+                    if ("ended".equals(reason)) fallback = ACTION_JS_ENDED;
+                    sendBroadcast(new Intent(fallback).setPackage(getPackageName()));
+                    return;
+                }
+
+                Log.i(TAG, "Native queue " + reason + " → " + item.videoId);
+                YoutubeStreamExtractor.Result stream = YoutubeStreamExtractor.resolve(item.videoId);
+                boolean weakTitle = item.title == null || item.title.isEmpty()
+                    || "NoRepeat".equals(item.title);
+                boolean weakArtist = item.artist == null || item.artist.isEmpty()
+                    || "Playing".equals(item.artist);
+                currentTitle = !weakTitle ? item.title : (stream.title != null ? stream.title : item.title);
+                currentArtist = !weakArtist ? item.artist : (stream.artist != null ? stream.artist : item.artist);
+                startPlayback(stream.url, parseHeaders(stream.headersJson));
+                notifyTrackChanged(item.videoId, currentTitle, currentArtist, item.queueItemId, reason);
+            } catch (Exception e) {
+                Log.e(TAG, "Native queue advance failed", e);
+                sendBroadcast(new Intent(ACTION_JS_ERROR).setPackage(getPackageName()));
+            } finally {
+                advancing.set(false);
+            }
+        });
+    }
+
+    private void notifyTrackChanged(
+        String videoId,
+        String title,
+        String artist,
+        String queueItemId,
+        String reason
+    ) {
+        Intent intent = new Intent(ACTION_JS_TRACK_CHANGED).setPackage(getPackageName());
+        intent.putExtra(EXTRA_VIDEO_ID, videoId);
+        intent.putExtra(EXTRA_TITLE, title != null ? title : "NoRepeat");
+        intent.putExtra(EXTRA_ARTIST, artist != null ? artist : "Playing");
+        intent.putExtra(EXTRA_QUEUE_ITEM_ID, queueItemId != null ? queueItemId : "");
+        intent.putExtra(EXTRA_REASON, reason);
+        sendBroadcast(intent);
     }
 
     private Map<String, String> parseHeaders(String headersJson) {
@@ -196,6 +419,8 @@ public class MediaPlaybackService extends Service {
             if (wakeLock != null && !wakeLock.isHeld()) {
                 wakeLock.acquire(6 * 60 * 60 * 1000L);
             }
+            updateMediaSessionMetadata();
+            updateMediaSessionState();
             mainHandler.post(positionTicker);
             promoteForeground();
         });
@@ -207,6 +432,7 @@ public class MediaPlaybackService extends Service {
             playingFlag.set(false);
             mainHandler.removeCallbacks(positionTicker);
             syncClockFromPlayer();
+            updateMediaSessionState();
             promoteForeground();
         });
     }
@@ -218,6 +444,7 @@ public class MediaPlaybackService extends Service {
                 playingFlag.set(true);
                 mainHandler.removeCallbacks(positionTicker);
                 mainHandler.post(positionTicker);
+                updateMediaSessionState();
                 promoteForeground();
             }
         });
@@ -234,6 +461,7 @@ public class MediaPlaybackService extends Service {
             playingFlag.set(false);
             positionMs.set(0);
             durationMs.set(0);
+            updateMediaSessionState();
             if (wakeLock != null && wakeLock.isHeld()) {
                 wakeLock.release();
             }
@@ -279,11 +507,14 @@ public class MediaPlaybackService extends Service {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
                 syncClockFromPlayer();
+                updateMediaSessionMetadata();
+                updateMediaSessionState();
                 if (playbackState == Player.STATE_ENDED) {
                     playingFlag.set(false);
                     mainHandler.removeCallbacks(positionTicker);
-                    sendBroadcast(new Intent(ACTION_JS_ENDED).setPackage(getPackageName()));
-                    promoteForeground();
+                    updateMediaSessionState();
+                    // Advance natively — WebView may be suspended in background.
+                    playAdjacentFromQueue(true, "ended");
                 }
             }
 
@@ -291,6 +522,7 @@ public class MediaPlaybackService extends Service {
             public void onIsPlayingChanged(boolean playing) {
                 playingFlag.set(playing);
                 syncClockFromPlayer();
+                updateMediaSessionState();
                 if (playing) {
                     mainHandler.removeCallbacks(positionTicker);
                     mainHandler.post(positionTicker);
@@ -303,6 +535,7 @@ public class MediaPlaybackService extends Service {
                 Log.e(TAG, "ExoPlayer error: " + error.getMessage(), error);
                 playingFlag.set(false);
                 mainHandler.removeCallbacks(positionTicker);
+                updateMediaSessionState();
                 promoteForeground();
                 sendBroadcast(new Intent(ACTION_JS_ERROR).setPackage(getPackageName()));
             }
@@ -341,22 +574,27 @@ public class MediaPlaybackService extends Service {
                 .setAction(playing ? ACTION_PAUSE : ACTION_RESUME),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
-        PendingIntent next = PendingIntent.getBroadcast(
+        PendingIntent next = PendingIntent.getService(
             this,
             2,
-            new Intent(ACTION_JS_NEXT).setPackage(getPackageName()),
+            new Intent(this, MediaPlaybackService.class).setAction(ACTION_SKIP_NEXT),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
-        PendingIntent prev = PendingIntent.getBroadcast(
+        PendingIntent prev = PendingIntent.getService(
             this,
             3,
-            new Intent(ACTION_JS_PREV).setPackage(getPackageName()),
+            new Intent(this, MediaPlaybackService.class).setAction(ACTION_SKIP_PREV),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
         int playPauseIcon = playing
             ? android.R.drawable.ic_media_pause
             : android.R.drawable.ic_media_play;
+
+        MediaStyle style = new MediaStyle().setShowActionsInCompactView(0, 1, 2);
+        if (mediaSession != null) {
+            style.setMediaSession(mediaSession.getSessionToken());
+        }
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(currentTitle)
@@ -367,7 +605,7 @@ public class MediaPlaybackService extends Service {
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setStyle(new MediaStyle().setShowActionsInCompactView(0, 1, 2))
+            .setStyle(style)
             .addAction(android.R.drawable.ic_media_previous, "Previous", prev)
             .addAction(playPauseIcon, playing ? "Pause" : "Play", playPause)
             .addAction(android.R.drawable.ic_media_next, "Next", next)
@@ -390,6 +628,12 @@ public class MediaPlaybackService extends Service {
     @Override
     public void onDestroy() {
         stopPlayback();
+        extractExecutor.shutdownNow();
+        if (mediaSession != null) {
+            mediaSession.setActive(false);
+            mediaSession.release();
+            mediaSession = null;
+        }
         super.onDestroy();
     }
 

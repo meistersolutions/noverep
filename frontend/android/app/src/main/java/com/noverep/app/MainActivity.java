@@ -48,6 +48,26 @@ public class MainActivity extends BridgeActivity {
                 case MediaPlaybackService.ACTION_JS_ERROR:
                     js = "window.dispatchEvent(new CustomEvent('noverep-media',{detail:{action:'error'}}));";
                     break;
+                case MediaPlaybackService.ACTION_JS_TRACK_CHANGED: {
+                    String videoId = intent.getStringExtra(MediaPlaybackService.EXTRA_VIDEO_ID);
+                    String title = intent.getStringExtra(MediaPlaybackService.EXTRA_TITLE);
+                    String artist = intent.getStringExtra(MediaPlaybackService.EXTRA_ARTIST);
+                    String queueItemId = intent.getStringExtra(MediaPlaybackService.EXTRA_QUEUE_ITEM_ID);
+                    String reason = intent.getStringExtra(MediaPlaybackService.EXTRA_REASON);
+                    if (videoId == null) videoId = "";
+                    if (title == null) title = "";
+                    if (artist == null) artist = "";
+                    if (queueItemId == null) queueItemId = "";
+                    if (reason == null) reason = "next";
+                    js = "window.dispatchEvent(new CustomEvent('noverep-media',{detail:{action:'track-changed'"
+                        + ",videoId:" + org.json.JSONObject.quote(videoId)
+                        + ",title:" + org.json.JSONObject.quote(title)
+                        + ",artist:" + org.json.JSONObject.quote(artist)
+                        + ",queueItemId:" + org.json.JSONObject.quote(queueItemId)
+                        + ",reason:" + org.json.JSONObject.quote(reason)
+                        + "}}));";
+                    break;
+                }
                 default:
                     return;
             }
@@ -133,6 +153,7 @@ public class MainActivity extends BridgeActivity {
         filter.addAction(MediaPlaybackService.ACTION_JS_PREV);
         filter.addAction(MediaPlaybackService.ACTION_JS_ENDED);
         filter.addAction(MediaPlaybackService.ACTION_JS_ERROR);
+        filter.addAction(MediaPlaybackService.ACTION_JS_TRACK_CHANGED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(mediaActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
