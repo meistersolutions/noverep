@@ -342,6 +342,7 @@ export const api = {
         album: string | null;
         genre: string | null;
         provider: string;
+        provider_track_id?: string | null;
         played_at: string;
         duration_listened: number;
         completion_pct: number;

@@ -79,6 +79,7 @@ export async function playNativeAudio(options: {
   videoId: string;
   title?: string;
   artist?: string;
+  startAtSec?: number;
 }): Promise<void> {
   if (!isAndroidNative()) return;
 
@@ -114,6 +115,12 @@ export async function playNativeAudio(options: {
       videoId: options.videoId,
       headersJson: stream.headersJson,
     });
+    if (options.startAtSec && options.startAtSec >= 5) {
+      // Seek after ExoPlayer has begun buffering the new source.
+      setTimeout(() => {
+        void seekNativeAudio(options.startAtSec!);
+      }, 400);
+    }
     void syncNativePlaybackQueue();
   } catch (err) {
     activeVideoId = null;

@@ -141,6 +141,7 @@ class HistoryEntryResponse(BaseModel):
     album: str | None
     genre: str | None
     provider: str
+    provider_track_id: str | None = None
     played_at: datetime
     duration_listened: int
     completion_pct: float

@@ -147,6 +147,9 @@ function bindNativeMediaControls() {
           artist: event.detail.artist,
           queueItemId: event.detail.queueItemId,
           reason: event.detail.reason || 'next',
+          prevVideoId: event.detail.prevVideoId,
+          prevPositionSec: event.detail.prevPositionSec,
+          prevDurationSec: event.detail.prevDurationSec,
         })
         .then(() => syncNativePlaybackQueue());
     }

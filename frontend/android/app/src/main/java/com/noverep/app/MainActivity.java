@@ -54,17 +54,24 @@ public class MainActivity extends BridgeActivity {
                     String artist = intent.getStringExtra(MediaPlaybackService.EXTRA_ARTIST);
                     String queueItemId = intent.getStringExtra(MediaPlaybackService.EXTRA_QUEUE_ITEM_ID);
                     String reason = intent.getStringExtra(MediaPlaybackService.EXTRA_REASON);
+                    String prevVideoId = intent.getStringExtra(MediaPlaybackService.EXTRA_PREV_VIDEO_ID);
+                    long prevPositionMs = intent.getLongExtra(MediaPlaybackService.EXTRA_PREV_POSITION_MS, 0L);
+                    long prevDurationMs = intent.getLongExtra(MediaPlaybackService.EXTRA_PREV_DURATION_MS, 0L);
                     if (videoId == null) videoId = "";
                     if (title == null) title = "";
                     if (artist == null) artist = "";
                     if (queueItemId == null) queueItemId = "";
                     if (reason == null) reason = "next";
+                    if (prevVideoId == null) prevVideoId = "";
                     js = "window.dispatchEvent(new CustomEvent('noverep-media',{detail:{action:'track-changed'"
                         + ",videoId:" + org.json.JSONObject.quote(videoId)
                         + ",title:" + org.json.JSONObject.quote(title)
                         + ",artist:" + org.json.JSONObject.quote(artist)
                         + ",queueItemId:" + org.json.JSONObject.quote(queueItemId)
                         + ",reason:" + org.json.JSONObject.quote(reason)
+                        + ",prevVideoId:" + org.json.JSONObject.quote(prevVideoId)
+                        + ",prevPositionSec:" + (prevPositionMs / 1000.0)
+                        + ",prevDurationSec:" + (prevDurationMs / 1000.0)
                         + "}}));";
                     break;
                 }

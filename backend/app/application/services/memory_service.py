@@ -180,9 +180,12 @@ class MemoryService:
             existing.duration_listened = max(existing.duration_listened, duration_listened)
             existing.completion_pct = max(existing.completion_pct, completion_pct)
             existing.skipped = existing.skipped or skipped
-            existing.explicitly_requested = (
-                existing.explicitly_requested or explicitly_requested
-            )
+            # Real listen/skip must count toward no-repeat even if the start
+            # event was marked explicitly_requested (e.g. buggy native clients).
+            if duration_listened > 0 or skipped:
+                existing.explicitly_requested = False
+            elif explicitly_requested:
+                existing.explicitly_requested = True
             if album:
                 existing.album_name = album
             if genre:

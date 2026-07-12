@@ -23,10 +23,25 @@ import {
   readCachedQueue,
   writeCachedQueue,
 } from '@/lib/sessionMemoryCache';
+import {
+  clearHeardTrackCache,
+  filterQueueAgainstHeard,
+  syncHeardFromHistory,
+} from '@/lib/heardTracksCache';
+import { savePlaybackPosition, clearPlaybackPosition } from '@/lib/playbackPositionCache';
 import toast from 'react-hot-toast';
 
 const cachedPreferences = readCachedPreferences();
-const cachedQueueSnapshot = readCachedQueue();
+const cachedQueueRaw = readCachedQueue();
+const cachedQueueSnapshot = cachedQueueRaw
+  ? {
+      ...cachedQueueRaw,
+      queue: filterQueueAgainstHeard(
+        cachedQueueRaw.queue,
+        cachedQueueRaw.currentTrack?.provider_track_id,
+      ),
+    }
+  : null;
 const hasStoredToken = !!localStorage.getItem('noverep_token');
 
 let advancingNext = false;
@@ -148,9 +163,10 @@ function applyQueueSnapshot(
   currentTrack: QueueItem | Track | null,
   isPlaying: boolean,
 ): { queue: QueueItem[]; currentTrack: QueueItem | Track | null } {
-  const deduped = dedupeQueue(queue);
-  const merged = resolveCurrentTrack(deduped, currentTrack, isPlaying);
-  const aligned = alignQueueWithCurrentTrack(deduped, merged);
+  const keepId = currentTrack?.provider_track_id;
+  const purged = filterQueueAgainstHeard(dedupeQueue(queue), keepId);
+  const merged = resolveCurrentTrack(purged, currentTrack, isPlaying);
+  const aligned = alignQueueWithCurrentTrack(purged, merged);
   return {
     queue: aligned,
     currentTrack: merged,
@@ -260,6 +276,9 @@ interface PlayerState {
     artist?: string;
     queueItemId?: string;
     reason?: string;
+    prevVideoId?: string;
+    prevPositionSec?: number;
+    prevDurationSec?: number;
   }) => Promise<void>;
   syncFromPlayer: () => void;
 }
@@ -300,6 +319,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     localStorage.removeItem('noverep_display_name');
     clearCachedPreferences();
     clearSessionContentCaches();
+    clearHeardTrackCache();
+    clearPlaybackPosition();
     set({
       token: null,
       username: null,
@@ -359,24 +380,36 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return;
       }
 
-      // Fast path: show server queue immediately, then reconcile with cross-device history.
+      // Rebuild local heard ids from server history, then purge session/server queue.
       try {
-        const existing = await api.getQueue();
-        if (existing?.length) {
-          const snapshot = applyQueueSnapshot(existing, get().currentTrack, playing);
-          set(snapshot);
-          void prefetchUpcoming(snapshot.queue);
+        const history = await api.getHistory();
+        syncHeardFromHistory(history);
+        const keepId = get().currentTrack?.provider_track_id;
+        const filtered = filterQueueAgainstHeard(get().queue, keepId);
+        if (filtered.length !== get().queue.length) {
+          set({
+            queue: alignQueueWithCurrentTrack(filtered, get().currentTrack),
+          });
         }
       } catch {
-        /* continue to reconcile */
+        /* continue */
       }
 
+      // Prefer sync (purge heard + refill) over raw getQueue.
       let queue = await api.syncQueue().catch(() => null);
+      if (!queue?.length) {
+        try {
+          const existing = await api.getQueue();
+          if (existing?.length) queue = existing;
+        } catch {
+          /* continue */
+        }
+      }
       if (!queue?.length) {
         queue = await api.refreshQueueFromPreferences().catch(() => null);
       }
       if (queue?.length) {
-        const snapshot = applyQueueSnapshot(queue, get().currentTrack, playing);
+        const snapshot = applyQueueSnapshot(queue, get().currentTrack, !!playing);
         set(snapshot);
         void prefetchUpcoming(snapshot.queue);
       }
@@ -492,10 +525,62 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   /** Native ExoPlayer already switched tracks — update UI/API without calling loadAndPlay. */
-  adoptNativeTrackChange: async ({ videoId, title, artist, queueItemId, reason }) => {
-    const { queue, sessionId } = get();
+  adoptNativeTrackChange: async ({
+    videoId,
+    title,
+    artist,
+    queueItemId,
+    reason,
+    prevVideoId,
+    prevPositionSec,
+    prevDurationSec,
+  }) => {
+    const { queue, sessionId, currentTrack, currentTime, duration } = get();
     const { setActiveVideoIdFromNative } = await import('@/lib/youtubePlayerController');
     setActiveVideoIdFromNative(videoId);
+
+    // Record the track that just ended/was skipped BEFORE resetting currentTime.
+    const previous =
+      (prevVideoId
+        ? queue.find((q) => q.provider_track_id === prevVideoId) ||
+          (currentTrack?.provider_track_id === prevVideoId ? currentTrack : null)
+        : null) ||
+      (currentTrack?.provider_track_id && currentTrack.provider_track_id !== videoId
+        ? currentTrack
+        : null);
+
+    if (previous && previous.provider_track_id !== videoId) {
+      const ended = reason === 'ended';
+      const skipped = reason === 'next' || reason === 'previous';
+      const listenSec = Math.max(
+        0,
+        Number.isFinite(prevPositionSec) ? Number(prevPositionSec) : currentTime,
+      );
+      const durSec = Math.max(
+        0,
+        Number.isFinite(prevDurationSec) && Number(prevDurationSec) > 0
+          ? Number(prevDurationSec)
+          : duration || previous.duration_seconds || 0,
+      );
+      try {
+        if (ended) {
+          const completeAt = durSec > 0 ? durSec : Math.max(listenSec, 1);
+          await recordPlayProgress(previous as Track, sessionId, completeAt, completeAt, false);
+        } else {
+          await recordPlayProgress(
+            previous as Track,
+            sessionId,
+            Math.max(listenSec, skipped ? 1 : 0),
+            durSec,
+            skipped,
+          );
+        }
+        get().bumpHistory();
+      } catch {
+        /* still advance UI */
+      }
+      clearPlaybackPosition(previous.provider_track_id);
+    }
 
     let match =
       (queueItemId ? queue.find((q) => q.id === queueItemId) : undefined) ||
@@ -527,10 +612,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
     }
 
+    // Drop the previous track from the local queue so it cannot reappear from session cache.
+    const withoutPrev = previous
+      ? queue.filter((q) => q.provider_track_id !== previous.provider_track_id)
+      : queue;
+
     setWantPlaying(true);
     set({
       currentTrack: match,
-      queue: alignQueueWithCurrentTrack(queue, match),
+      queue: alignQueueWithCurrentTrack(
+        filterQueueAgainstHeard(withoutPrev, match.provider_track_id),
+        match,
+      ),
       isPlaying: true,
       currentTime: 0,
       duration: match.duration_seconds ?? 0,
@@ -541,7 +634,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (queueItemId && queue.some((q) => q.id === queueItemId)) {
         await api.playQueueItem(queueItemId);
       } else {
-        // Best-effort: play by adding/setting via queue item if we can find it after refresh.
         const serverQueue = await api.getQueue().catch(() => null);
         const byVideo = serverQueue?.find((q) => q.provider_track_id === videoId);
         if (byVideo) {
@@ -549,28 +641,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
       }
 
-      const serverQueue = await api.getQueue().catch(() => null);
+      // Purge heard songs server-side now that history was written.
+      const synced = await api.syncQueue().catch(() => null);
+      const serverQueue = synced ?? (await api.getQueue().catch(() => null));
       if (serverQueue?.length) {
         const serverMatch = serverQueue.find((q) => q.provider_track_id === videoId);
         if (serverMatch) {
-          set({
-            currentTrack: serverMatch,
-            queue: alignQueueWithCurrentTrack(serverQueue, serverMatch),
-            duration: serverMatch.duration_seconds ?? get().duration,
-          });
+          set(applyQueueSnapshot(serverQueue, serverMatch, true));
         } else {
-          // Keep optimistic currentTrack; only refresh the list around it.
           set({
-            queue: alignQueueWithCurrentTrack(serverQueue, get().currentTrack),
+            queue: applyQueueSnapshot(serverQueue, get().currentTrack, true).queue,
           });
         }
       }
 
-      void recordPlayStart(
-        get().currentTrack!,
-        sessionId,
-        reason === 'next' || reason === 'previous',
-      ).catch(() => {});
+      // Skip/auto-next must count toward memory (not explicitly_requested).
+      void recordPlayStart(get().currentTrack!, sessionId, false).catch(() => {});
       get().bumpHistory();
     } catch {
       /* native audio already playing */
@@ -603,7 +689,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       pausePlayback();
     }
     if (!playing) {
-      const { currentTime, duration } = get();
+      const { currentTrack, currentTime, duration } = get();
+      if (currentTrack?.provider_track_id) {
+        savePlaybackPosition(currentTrack.provider_track_id, currentTime, duration);
+      }
       if (currentTime >= 30 || (duration > 0 && currentTime / duration >= 0.5)) {
         get().recordCurrentPlayback(false);
       }

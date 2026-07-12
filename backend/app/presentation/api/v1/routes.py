@@ -887,6 +887,7 @@ async def get_history(
                 album=h.album_name,
                 genre=h.genre_name,
                 provider=h.provider,
+                provider_track_id=video_id,
                 played_at=h.played_at,
                 duration_listened=h.duration_listened,
                 completion_pct=h.completion_pct,

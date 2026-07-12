@@ -72,6 +72,9 @@ public class MediaPlaybackService extends Service {
     public static final String EXTRA_VIDEO_ID = "video_id";
     public static final String EXTRA_QUEUE_ITEM_ID = "queue_item_id";
     public static final String EXTRA_REASON = "reason"; // next | previous | ended
+    public static final String EXTRA_PREV_VIDEO_ID = "prev_video_id";
+    public static final String EXTRA_PREV_POSITION_MS = "prev_position_ms";
+    public static final String EXTRA_PREV_DURATION_MS = "prev_duration_ms";
 
     private static final String DEFAULT_UA =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
@@ -327,6 +330,11 @@ public class MediaPlaybackService extends Service {
         }
         extractExecutor.execute(() -> {
             try {
+                PlaybackQueueStore.Item previous = PlaybackQueueStore.current();
+                long prevPosMs = positionMs.get();
+                long prevDurMs = durationMs.get();
+                String prevVideoId = previous != null ? previous.videoId : "";
+
                 PlaybackQueueStore.Item item = next
                     ? PlaybackQueueStore.advanceNext()
                     : PlaybackQueueStore.advancePrevious();
@@ -348,7 +356,16 @@ public class MediaPlaybackService extends Service {
                 currentTitle = !weakTitle ? item.title : (stream.title != null ? stream.title : item.title);
                 currentArtist = !weakArtist ? item.artist : (stream.artist != null ? stream.artist : item.artist);
                 startPlayback(stream.url, parseHeaders(stream.headersJson));
-                notifyTrackChanged(item.videoId, currentTitle, currentArtist, item.queueItemId, reason);
+                notifyTrackChanged(
+                    item.videoId,
+                    currentTitle,
+                    currentArtist,
+                    item.queueItemId,
+                    reason,
+                    prevVideoId,
+                    prevPosMs,
+                    prevDurMs
+                );
             } catch (Exception e) {
                 Log.e(TAG, "Native queue advance failed", e);
                 sendBroadcast(new Intent(ACTION_JS_ERROR).setPackage(getPackageName()));
@@ -363,7 +380,10 @@ public class MediaPlaybackService extends Service {
         String title,
         String artist,
         String queueItemId,
-        String reason
+        String reason,
+        String prevVideoId,
+        long prevPositionMs,
+        long prevDurationMs
     ) {
         Intent intent = new Intent(ACTION_JS_TRACK_CHANGED).setPackage(getPackageName());
         intent.putExtra(EXTRA_VIDEO_ID, videoId);
@@ -371,6 +391,9 @@ public class MediaPlaybackService extends Service {
         intent.putExtra(EXTRA_ARTIST, artist != null ? artist : "Playing");
         intent.putExtra(EXTRA_QUEUE_ITEM_ID, queueItemId != null ? queueItemId : "");
         intent.putExtra(EXTRA_REASON, reason);
+        intent.putExtra(EXTRA_PREV_VIDEO_ID, prevVideoId != null ? prevVideoId : "");
+        intent.putExtra(EXTRA_PREV_POSITION_MS, prevPositionMs);
+        intent.putExtra(EXTRA_PREV_DURATION_MS, prevDurationMs);
         sendBroadcast(intent);
     }
 

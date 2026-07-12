@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { usePlayerStore } from '@/stores/playerStore';
 import {
   getPlayer,
+  getActiveVideoId,
   handlePlayerStateChange,
   setOnNaturalEnd,
   setOnPlayingChange,
@@ -156,6 +157,14 @@ export function YouTubePlayer() {
       if (Number.isFinite(t)) setCurrentTime(t);
       const d = p.getDuration();
       if (d && Number.isFinite(d) && d > 0) setDuration(d);
+      if (Number.isFinite(t) && t >= 5) {
+        const videoId = getActiveVideoId();
+        if (videoId) {
+          void import('@/lib/playbackPositionCache').then(({ savePlaybackPosition }) => {
+            savePlaybackPosition(videoId, t, d || 0);
+          });
+        }
+      }
       syncFromPlayer();
     }, 250);
     return () => clearInterval(id);

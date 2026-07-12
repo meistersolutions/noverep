@@ -356,6 +356,9 @@ export function handlePlayerStateChange(state: number, target: YTPlayerInstance)
 }
 
 export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
+  const { takeResumePosition } = await import('@/lib/playbackPositionCache');
+  const resumeAt = takeResumePosition(videoId);
+
   // Android app: prefer NewPipe-style ExoPlayer; fall back to YouTube iframe if stream fails.
   if (isAndroidNative()) {
     const track = usePlayerStore.getState().currentTrack;
@@ -371,8 +374,12 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
         videoId,
         title: track?.title,
         artist: track?.artist,
+        startAtSec: resumeAt ?? undefined,
       });
       usingNativePlayer = true;
+      if (resumeAt) {
+        usePlayerStore.getState().setCurrentTime(resumeAt);
+      }
       return;
     } catch (err) {
       console.warn('[noverep] native audio failed, falling back to YouTube iframe', err);
@@ -415,12 +422,23 @@ export async function loadAndPlay(videoId: string, volume = 80): Promise<void> {
   if (usePrefetched) {
     attemptPlay(videoId, generation);
     schedulePlayRetries(videoId, generation);
-    return;
+  } else {
+    player.loadVideoById(videoId);
+    attemptPlay(videoId, generation);
+    schedulePlayRetries(videoId, generation);
   }
 
-  player.loadVideoById(videoId);
-  attemptPlay(videoId, generation);
-  schedulePlayRetries(videoId, generation);
+  if (resumeAt && resumeAt >= 5) {
+    setTimeout(() => {
+      if (generation !== playbackGeneration) return;
+      try {
+        player?.seekTo(resumeAt, true);
+        usePlayerStore.getState().setCurrentTime(resumeAt);
+      } catch {
+        /* ignore */
+      }
+    }, 600);
+  }
 }
 
 export function pausePlayback() {
@@ -472,7 +490,13 @@ export async function syncNativePlaybackClock(
   if (Number.isFinite(status.position)) setCurrentTime(status.position);
   if (status.duration > 0) setDuration(status.duration);
   const id = getNativeAudioVideoId();
-  if (id) notifyActiveVideo(id);
+  if (id) {
+    notifyActiveVideo(id);
+    if (status.playing && status.position >= 5) {
+      const { savePlaybackPosition } = await import('@/lib/playbackPositionCache');
+      savePlaybackPosition(id, status.position, status.duration || 0);
+    }
+  }
 }
 
 export async function teardownNativePlayback(): Promise<void> {
