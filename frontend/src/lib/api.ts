@@ -96,6 +96,32 @@ function getToken(): string | null {
   return localStorage.getItem('noverep_token');
 }
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+let handlingUnauthorized = false;
+
+function handleUnauthorized() {
+  if (handlingUnauthorized) return;
+  handlingUnauthorized = true;
+  localStorage.removeItem('noverep_token');
+  // Lazy import avoids a circular dependency with playerStore.
+  void import('@/stores/playerStore')
+    .then(({ usePlayerStore }) => {
+      usePlayerStore.getState().logout();
+    })
+    .finally(() => {
+      handlingUnauthorized = false;
+    });
+}
+
 function formatApiError(detail: unknown): string {
   if (!detail) return 'Request failed';
   if (typeof detail === 'string') return detail;
@@ -140,7 +166,11 @@ async function request<T>(
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(formatApiError(err.detail) || res.statusText);
+      if (res.status === 401) {
+        handleUnauthorized();
+        throw new ApiError('Session expired — please sign in again', 401);
+      }
+      throw new ApiError(formatApiError(err.detail) || res.statusText, res.status);
     }
     if (res.status === 204) return undefined as T;
     const text = await res.text();

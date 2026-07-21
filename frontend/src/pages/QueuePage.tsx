@@ -41,8 +41,9 @@ export default function QueuePage() {
         setSeeds([]);
         toast.success('Queue refreshed from your preferences');
       }
-    } catch {
-      toast.error('Could not refresh queue');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not refresh queue';
+      toast.error(message);
     } finally {
       setRefreshing(false);
     }
