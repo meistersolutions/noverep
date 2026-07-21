@@ -15,13 +15,18 @@ def _candidate(provider_track_id: str, canonical_song_id=None):
     )
 
 
+def _svc(**kwargs) -> QueueService:
+    return QueueService(
+        recommendation_engine=SimpleNamespace(),
+        memory_service=SimpleNamespace(),
+        normalizer=SimpleNamespace(),
+        **kwargs,
+    )
+
+
 class TestSkipRecommendationCandidate:
     def setup_method(self):
-        self.svc = QueueService(
-            recommendation_engine=SimpleNamespace(),
-            memory_service=SimpleNamespace(),
-            normalizer=SimpleNamespace(),
-        )
+        self.svc = _svc()
 
     def test_skips_track_already_in_queue(self):
         existing_tracks = {"vid-1"}
@@ -50,11 +55,7 @@ class TestSkipRecommendationCandidate:
 
 class TestHeardQueueItem:
     def setup_method(self):
-        self.svc = QueueService(
-            recommendation_engine=SimpleNamespace(),
-            memory_service=SimpleNamespace(),
-            normalizer=SimpleNamespace(),
-        )
+        self.svc = _svc()
         self.song_id = uuid4()
         self.item = QueueItemModel(
             user_id=uuid4(),
@@ -99,3 +100,48 @@ class TestHeardQueueItem:
             )
         ]
         assert not self.svc._is_heard_queue_item(self.item, set(), heard)
+
+
+class TestNormalizeSeeds:
+    def setup_method(self):
+        self.svc = _svc()
+
+    def test_trims_dedupes_and_caps(self):
+        seeds = self.svc._normalize_seeds(
+            ["  Coldplay ", "coldplay", "Ilaiyaraaja", "", "A", "B", "C", "D"]
+        )
+        assert seeds == ["Coldplay", "Ilaiyaraaja", "A", "B", "C"]
+
+    def test_empty(self):
+        assert self.svc._normalize_seeds(None) == []
+        assert self.svc._normalize_seeds([]) == []
+
+
+class TestInterleaveSeedQueries:
+    def setup_method(self):
+        self.svc = _svc()
+
+    def test_round_robins_across_seeds(self):
+        queries = self.svc._interleave_seed_queries(
+            ["Alpha", "Beta"],
+            ["english"],
+        )
+        # First variant of each seed before second variants (round-robin).
+        assert any("Alpha" in q for q in queries[:2])
+        assert any("Beta" in q for q in queries[:2])
+        # Escape-hatch random discovery is always appended.
+        assert len(queries) >= 7
+
+    def test_build_uses_multiple_active_seeds(self):
+        pref = SimpleNamespace(
+            active_search_query="legacy",
+            active_search_queries=["Rahman", "Coldplay"],
+            preferred_languages=["english"],
+            language_preference=None,
+            discovery_year_from=None,
+            discovery_year_to=None,
+        )
+        queries = self.svc._build_discovery_queries(pref)
+        joined = " ".join(queries).lower()
+        assert "rahman" in joined
+        assert "coldplay" in joined

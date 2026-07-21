@@ -157,6 +157,7 @@ class UserPreferencesResponse(BaseModel):
     language_preference: str | None
     preferred_languages: list[str] = []
     active_search_query: str | None = None
+    active_search_queries: list[str] = []
     favorite_artists: list[str]
     onboarding_completed: bool
     preferred_genres: list[str]
@@ -220,6 +221,7 @@ class UpdatePreferencesRequest(BaseModel):
     language_preference: str | None = None
     preferred_languages: list[str] | None = None
     active_search_query: str | None = None
+    active_search_queries: list[str] | None = None
     favorite_artists: list[str] | None = None
     onboarding_completed: bool | None = None
     preferred_genres: list[str] | None = None

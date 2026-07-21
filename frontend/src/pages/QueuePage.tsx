@@ -8,7 +8,7 @@ import { usePlayerStore } from '@/stores/playerStore';
 import type { QueueRefreshOptions } from '@/lib/api';
 
 export default function QueuePage() {
-  const [query, setQuery] = useState('');
+  const [seeds, setSeeds] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const refreshQueueFromSearch = usePlayerStore((s) => s.refreshQueueFromSearch);
   const refreshQueueFromPreferences = usePlayerStore((s) => s.refreshQueueFromPreferences);
@@ -21,7 +21,7 @@ export default function QueuePage() {
     void refreshQueueInBackground();
   }, [refreshQueueInBackground]);
 
-  const handleRefresh = async (seed: string | null, options: QueueRefreshOptions) => {
+  const handleRefresh = async (nextSeeds: string[] | null, options: QueueRefreshOptions) => {
     if (usePlayerStore.getState().playbackMode === 'playlist') {
       toast.error('Exit playlist mode first — play from Home or Search');
       return;
@@ -29,12 +29,16 @@ export default function QueuePage() {
     setRefreshing(true);
     toast('Rebuilding your queue…', { icon: '⏳' });
     try {
-      if (seed) {
-        await refreshQueueFromSearch(seed, options);
-        toast.success('Queue updated from your search');
+      if (nextSeeds?.length) {
+        await refreshQueueFromSearch(nextSeeds, options);
+        toast.success(
+          nextSeeds.length === 1
+            ? 'Queue updated from your search'
+            : `Queue mixed from ${nextSeeds.length} seeds`,
+        );
       } else {
         await refreshQueueFromPreferences(options);
-        setQuery('');
+        setSeeds([]);
         toast.success('Queue refreshed from your preferences');
       }
     } catch {
@@ -44,8 +48,8 @@ export default function QueuePage() {
     }
   };
 
-  const handleClearSeed = async () => {
-    setQuery('');
+  const handleClearSeeds = async () => {
+    setSeeds([]);
     await clearActiveSearchQuery();
     toast.success('Queue will use random discovery again');
   };
@@ -63,19 +67,19 @@ export default function QueuePage() {
       )}
 
       <QueueRefreshPanel
-        query={query}
-        onQueryChange={setQuery}
+        seeds={seeds}
+        onSeedsChange={setSeeds}
         onRefresh={handleRefresh}
         refreshing={refreshing}
       />
 
-      {query && (
+      {seeds.length > 0 && (
         <button
           type="button"
-          onClick={handleClearSeed}
+          onClick={handleClearSeeds}
           className="text-xs text-white/50 hover:text-white underline"
         >
-          Clear active search seed
+          Clear active search seeds
         </button>
       )}
 

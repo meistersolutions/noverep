@@ -229,6 +229,7 @@ class UserPreferencesModel(Base):
     language_preference: Mapped[str | None] = mapped_column(String(20), nullable=True)
     preferred_languages: Mapped[list | None] = mapped_column(JSONB, default=list)
     active_search_query: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active_search_queries: Mapped[list | None] = mapped_column(JSONB, default=list)
     favorite_artists: Mapped[list | None] = mapped_column(JSONB, default=list)
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     preferred_genres: Mapped[list | None] = mapped_column(JSONB, default=list)

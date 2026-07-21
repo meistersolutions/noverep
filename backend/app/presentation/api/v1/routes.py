@@ -679,7 +679,10 @@ async def play_next_in_queue(
 
 @router.post("/queue/refresh", response_model=list[QueueItemResponse])
 async def refresh_queue(
-    seed: str | None = Query(default=None, description="Search query to seed upcoming tracks"),
+    seed: str | None = Query(default=None, description="Single search seed (legacy)"),
+    seeds: str | None = Query(
+        default=None, description="Comma-separated search seeds to mix into the queue"
+    ),
     from_preferences: bool = Query(default=False, description="Seed from user preferences instead"),
     languages: str | None = Query(
         default=None, description="Comma-separated language codes for this refresh"
@@ -693,8 +696,16 @@ async def refresh_queue(
     session: AsyncSession = Depends(get_db_session),
     queue_svc: QueueService = Depends(get_queue_service),
 ):
-    if from_preferences and seed:
-        raise HTTPException(status_code=400, detail="Use either seed or from_preferences, not both")
+    seed_list = queue_svc._normalize_seeds(
+        [s.strip() for s in seeds.split(",") if s.strip()] if seeds else None
+    )
+    if not seed_list and seed and seed.strip():
+        seed_list = queue_svc._normalize_seeds([seed])
+
+    if from_preferences and seed_list:
+        raise HTTPException(
+            status_code=400, detail="Use either seeds or from_preferences, not both"
+        )
 
     lang_list = [s.strip() for s in languages.split(",") if s.strip()] if languages else None
     filters = QueueRefreshFilters(
@@ -707,7 +718,8 @@ async def refresh_queue(
     items = await queue_svc.refresh_upcoming(
         session,
         user.id,
-        seed_query=seed,
+        seed_queries=seed_list or None,
+        seed_query=seed_list[0] if seed_list else None,
         from_preferences=from_preferences,
         filters=filters,
     )
@@ -961,6 +973,12 @@ async def get_preferences(
         language_preference=prefs.language_preference,
         preferred_languages=prefs.preferred_languages or [],
         active_search_query=getattr(prefs, "active_search_query", None),
+        active_search_queries=list(getattr(prefs, "active_search_queries", None) or [])
+        or (
+            [prefs.active_search_query]
+            if getattr(prefs, "active_search_query", None)
+            else []
+        ),
         favorite_artists=prefs.favorite_artists or [],
         onboarding_completed=getattr(prefs, "onboarding_completed", False) or False,
         preferred_genres=prefs.preferred_genres or [],
@@ -1001,6 +1019,18 @@ async def update_preferences(
         updates["preferred_languages"] = normalize_language_list(updates["preferred_languages"])
     if updates.get("active_search_query") == "":
         updates["active_search_query"] = None
+    if "active_search_queries" in updates:
+        raw = updates["active_search_queries"]
+        cleaned = QueueService._normalize_seeds(raw if isinstance(raw, list) else [])
+        updates["active_search_queries"] = cleaned
+        # Keep legacy single field in sync unless explicitly set in this request.
+        if "active_search_query" not in updates:
+            updates["active_search_query"] = cleaned[0] if cleaned else None
+    elif "active_search_query" in updates:
+        single = updates["active_search_query"]
+        updates["active_search_queries"] = (
+            QueueService._normalize_seeds([single]) if single else []
+        )
     for field, value in updates.items():
         setattr(prefs, field, value)
     await session.flush()

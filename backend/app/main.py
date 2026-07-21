@@ -73,6 +73,12 @@ async def lifespan(app: FastAPI):
             )
         )
         await conn.execute(
+            text(
+                "ALTER TABLE user_preferences "
+                "ADD COLUMN IF NOT EXISTS active_search_queries JSONB DEFAULT '[]'"
+            )
+        )
+        await conn.execute(
             text("ALTER TABLE playlists ADD COLUMN IF NOT EXISTS is_system BOOLEAN DEFAULT FALSE")
         )
         await conn.execute(

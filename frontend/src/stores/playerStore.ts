@@ -258,7 +258,7 @@ interface PlayerState {
   refreshQueue: () => Promise<void>;
   fillQueue: () => Promise<void>;
   syncQueue: () => Promise<void>;
-  refreshQueueFromSearch: (query: string, options?: QueueRefreshOptions) => Promise<void>;
+  refreshQueueFromSearch: (query: string | string[], options?: QueueRefreshOptions) => Promise<void>;
   refreshQueueFromPreferences: (options?: QueueRefreshOptions) => Promise<void>;
   clearActiveSearchQuery: () => Promise<void>;
   playNextInsert: (track: Track, explicit?: boolean) => Promise<void>;
@@ -454,12 +454,20 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
   },
 
-  refreshQueueFromSearch: async (query: string, options?) => {
+  refreshQueueFromSearch: async (query, options?) => {
     if (get().playbackMode === 'playlist') return;
-    const queue = await api.refreshQueue(query, options);
+    const seeds = (Array.isArray(query) ? query : [query])
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    const queue = await api.refreshQueue(seeds, options);
     const { currentTrack, isPlaying } = get();
     const preferences = get().preferences
-      ? { ...get().preferences!, active_search_query: query.trim() }
+      ? {
+          ...get().preferences!,
+          active_search_query: seeds[0] ?? null,
+          active_search_queries: seeds,
+        }
       : get().preferences;
     set({
       ...applyQueueSnapshot(queue, currentTrack, isPlaying),
@@ -473,7 +481,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const queue = await api.refreshQueueFromPreferences(options);
     const { currentTrack, isPlaying } = get();
     const preferences = get().preferences
-      ? { ...get().preferences!, active_search_query: null }
+      ? {
+          ...get().preferences!,
+          active_search_query: null,
+          active_search_queries: [],
+        }
       : get().preferences;
     set({
       ...applyQueueSnapshot(queue, currentTrack, isPlaying),
@@ -1025,13 +1037,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   loadPreferences: async () => {
     const preferences = await api.getPreferences();
-    writeCachedPreferences(preferences);
+    const normalized = {
+      ...preferences,
+      active_search_queries:
+        preferences.active_search_queries?.length
+          ? preferences.active_search_queries
+          : preferences.active_search_query
+            ? [preferences.active_search_query]
+            : [],
+    };
+    writeCachedPreferences(normalized);
     set({
-      preferences,
-      shuffle: preferences.shuffle,
-      autoplay: preferences.autoplay,
-      playbackMode: preferences.playback_mode || 'discovery',
-      activePlaylistId: preferences.active_playlist_id,
+      preferences: normalized,
+      shuffle: normalized.shuffle,
+      autoplay: normalized.autoplay,
+      playbackMode: normalized.playback_mode || 'discovery',
+      activePlaylistId: normalized.active_playlist_id,
     });
   },
 }));

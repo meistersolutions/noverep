@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 import asyncio
@@ -25,10 +27,14 @@ from app.infrastructure.database.models import (
     UserPreferencesModel,
 )
 
+if TYPE_CHECKING:
+    from app.application.services.home_recommendations import HomeRecommendationService
+
 logger = structlog.get_logger()
 
 TARGET_QUEUE_SIZE = 20
 QUEUE_SYNC_TIMEOUT_SEC = 55.0
+MAX_ACTIVE_SEEDS = 5
 
 
 @dataclass
@@ -56,10 +62,12 @@ class QueueService:
         recommendation_engine: RecommendationEngine,
         memory_service: MemoryService,
         normalizer: SongNormalizer,
+        home_recommendations: "HomeRecommendationService | None" = None,
     ):
         self.recommendation = recommendation_engine
         self.memory = memory_service
         self.normalizer = normalizer
+        self.home = home_recommendations
 
     async def get_queue(self, session: AsyncSession, user_id: UUID) -> list[QueueItemModel]:
         result = await session.execute(
@@ -68,6 +76,36 @@ class QueueService:
             .order_by(QueueItemModel.position)
         )
         return list(result.scalars().all())
+
+    @staticmethod
+    def _normalize_seeds(seeds: list[str] | None) -> list[str]:
+        if not seeds:
+            return []
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in seeds:
+            if not isinstance(raw, str):
+                continue
+            q = raw.strip()
+            if not q:
+                continue
+            key = q.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(q)
+            if len(out) >= MAX_ACTIVE_SEEDS:
+                break
+        return out
+
+    def _active_seeds(self, pref: UserPreferencesModel | None) -> list[str]:
+        if not pref:
+            return []
+        from_list = self._normalize_seeds(getattr(pref, "active_search_queries", None) or [])
+        if from_list:
+            return from_list
+        single = (getattr(pref, "active_search_query", None) or "").strip()
+        return [single] if single else []
 
     def _user_languages(self, pref: UserPreferencesModel | None) -> list[str]:
         return resolve_languages_from_prefs(pref)
@@ -82,12 +120,36 @@ class QueueService:
             augment_search_query(f"{q} official audio", langs),
         ]
 
+    def _interleave_seed_queries(
+        self,
+        seeds: list[str],
+        langs: list[str],
+        *,
+        current: QueueItemModel | None = None,
+    ) -> list[str]:
+        """Round-robin query variants across seeds so the queue mixes niches."""
+        per_seed = [self._search_seed_queries(seed, langs) for seed in seeds]
+        queries: list[str] = []
+        max_len = max((len(qs) for qs in per_seed), default=0)
+        for i in range(max_len):
+            for seed_qs in per_seed:
+                if i < len(seed_qs):
+                    queries.append(seed_qs[i])
+        if current:
+            for seed in seeds[:3]:
+                queries.append(augment_search_query(f"{current.artist} {seed}", langs))
+        # Escape hatch so refill cannot paint itself into a single-niche corner.
+        lang = langs[0] if len(langs) == 1 else random.choice(langs)
+        queries.append(random_lang_discovery_query(lang))
+        return queries
+
     def _build_discovery_queries(
         self,
         pref: UserPreferencesModel | None,
         *,
         current: QueueItemModel | None = None,
         seed_query: str | None = None,
+        seed_queries: list[str] | None = None,
         from_preferences: bool = False,
         filters: QueueRefreshFilters | None = None,
     ) -> list[str]:
@@ -104,13 +166,13 @@ class QueueService:
                 *self._year_queries(pref, filters=filters),
             ]
 
-        active = (getattr(pref, "active_search_query", None) or "").strip() if pref else ""
-        effective_seed = (seed_query or active or "").strip()
-        if effective_seed:
-            queries = self._search_seed_queries(effective_seed, langs)
-            if current:
-                queries.append(augment_search_query(f"{current.artist} {effective_seed}", langs))
-            return queries
+        seeds = self._normalize_seeds(seed_queries)
+        if not seeds and seed_query and seed_query.strip():
+            seeds = self._normalize_seeds([seed_query])
+        if not seeds:
+            seeds = self._active_seeds(pref)
+        if seeds:
+            return self._interleave_seed_queries(seeds, langs, current=current)
 
         if current:
             return [
@@ -126,16 +188,108 @@ class QueueService:
             random_lang_discovery_query(langs[0] if len(langs) == 1 else random.choice(langs)),
         ]
 
+    async def _persist_active_seeds(
+        self,
+        session: AsyncSession,
+        pref: UserPreferencesModel | None,
+        seeds: list[str] | None,
+    ) -> None:
+        if not pref:
+            return
+        cleaned = self._normalize_seeds(seeds)
+        pref.active_search_queries = cleaned
+        # Keep legacy single field in sync for older clients.
+        pref.active_search_query = cleaned[0] if cleaned else None
+        await session.flush()
+
     async def _persist_active_search(
         self,
         session: AsyncSession,
         pref: UserPreferencesModel | None,
         query: str | None,
     ) -> None:
-        if not pref:
-            return
-        pref.active_search_query = query.strip() if query and query.strip() else None
-        await session.flush()
+        """Back-compat wrapper: persist a single seed as a one-item list."""
+        await self._persist_active_seeds(
+            session, pref, [query] if query and query.strip() else []
+        )
+
+    @staticmethod
+    def _track_response_to_provider(track) -> ProviderTrack:
+        return ProviderTrack(
+            provider=track.provider,
+            provider_track_id=track.provider_track_id,
+            title=track.title,
+            artist=track.artist,
+            album=track.album,
+            duration_seconds=track.duration_seconds,
+            thumbnail_url=track.thumbnail_url,
+            canonical_song_id=getattr(track, "canonical_song_id", None),
+            popularity=float(getattr(track, "score", 0) or 0),
+        )
+
+    async def _append_home_discovery(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        queue: list[QueueItemModel],
+        target_size: int,
+    ) -> list[QueueItemModel]:
+        """Fill remaining slots from the same discovery pool as the home screen."""
+        if not self.home or len(queue) >= target_size:
+            return queue
+
+        try:
+            sections = await self.home.get_home_sections(session, user_id)
+        except Exception as e:
+            logger.warning("home_discovery_fallback_failed", user_id=str(user_id), error=str(e))
+            return queue
+
+        tracks = []
+        for section in sections:
+            for track in section.get("tracks") or []:
+                tracks.append(track)
+        if not tracks:
+            return queue
+
+        random.shuffle(tracks)
+        existing = await self._queue_track_ids(queue)
+        existing_songs = await self._queue_song_ids(queue)
+        blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+        added = 0
+
+        for track in tracks:
+            if len(queue) >= target_size:
+                break
+            provider_track = self._track_response_to_provider(track)
+            candidate = SimpleNamespace(track=provider_track)
+            if self._skip_recommendation_candidate(
+                candidate, existing, existing_songs, blocked_songs
+            ):
+                continue
+            try:
+                is_first = len(queue) == 0
+                item = await self._append_track(
+                    session,
+                    user_id,
+                    provider_track,
+                    len(queue),
+                    is_current=is_first,
+                )
+                queue.append(item)
+                existing.add(item.provider_track_id)
+                existing_songs.add(item.song_id)
+                added += 1
+            except ValueError:
+                continue
+
+        if added:
+            logger.info(
+                "queue_filled_from_home",
+                user_id=str(user_id),
+                added=added,
+                size=len(queue),
+            )
+        return queue
 
     def _seed_from_track(self, artist: str, pref: UserPreferencesModel | None) -> str:
         langs = self._user_languages(pref)
@@ -501,7 +655,8 @@ class QueueService:
 
         query_idx = 0
         attempts = 0
-        max_attempts = min(target_size * 2, 16)
+        seed_count = len(self._active_seeds(pref))
+        max_attempts = min(target_size * 2 + seed_count * 2, 24)
 
         while len(queue) < target_size and attempts < max_attempts:
             attempts += 1
@@ -541,6 +696,9 @@ class QueueService:
             if not added_any and query_idx >= len(queries) * 2:
                 break
 
+        if len(queue) < target_size:
+            queue = await self._append_home_discovery(session, user_id, queue, target_size)
+
         await session.flush()
         queue = await self._dedupe_queue(session, queue)
         logger.info("queue_synced", user_id=str(user_id), size=len(queue))
@@ -552,6 +710,7 @@ class QueueService:
         user_id: UUID,
         *,
         seed_query: str | None = None,
+        seed_queries: list[str] | None = None,
         from_preferences: bool = False,
         target_size: int = TARGET_QUEUE_SIZE,
         filters: QueueRefreshFilters | None = None,
@@ -579,14 +738,19 @@ class QueueService:
         pref = prefs_result.scalar_one_or_none()
         recent = await self._recent_context(session, user_id)
 
+        seeds = self._normalize_seeds(seed_queries)
+        if not seeds and seed_query and seed_query.strip():
+            seeds = self._normalize_seeds([seed_query])
+
         if from_preferences:
-            await self._persist_active_search(session, pref, None)
-        elif seed_query:
-            await self._persist_active_search(session, pref, seed_query)
+            await self._persist_active_seeds(session, pref, [])
+        elif seeds:
+            await self._persist_active_seeds(session, pref, seeds)
 
         queries = self._build_discovery_queries(
             pref,
             current=current,
+            seed_queries=seeds or None,
             seed_query=seed_query,
             from_preferences=from_preferences,
             filters=filters,
@@ -595,7 +759,7 @@ class QueueService:
         queue = await self.get_queue(session, user_id)
         query_idx = 0
         attempts = 0
-        max_attempts = min(target_size * 2, 16)
+        max_attempts = min(target_size * 2 + len(seeds) * 2, 24)
         seed_artists = recent["artists"] + ([current.artist] if current else [])
 
         while len(queue) < target_size and attempts < max_attempts:
@@ -637,15 +801,19 @@ class QueueService:
             if not added_any and query_idx >= len(queries) * 2:
                 break
 
+        if len(queue) < target_size:
+            queue = await self._append_home_discovery(session, user_id, queue, target_size)
+
         if queue and not any(q.is_current for q in queue):
             queue[0].is_current = True
 
         await session.flush()
         queue = await self._dedupe_queue(session, queue)
+        active = self._active_seeds(pref)
         source = (
             "preferences"
             if from_preferences
-            else ("search" if seed_query or (pref and pref.active_search_query) else "current")
+            else ("search" if seeds or active else "current")
         )
         logger.info("queue_refreshed", user_id=str(user_id), size=len(queue), source=source)
         return queue
@@ -662,7 +830,8 @@ class QueueService:
         queries = self._build_discovery_queries(pref)
         query_idx = 0
         attempts = 0
-        max_attempts = min(target_size * 2, 16)
+        seed_count = len(self._active_seeds(pref))
+        max_attempts = min(target_size * 2 + seed_count * 2, 24)
 
         while len(queue) < target_size and attempts < max_attempts:
             attempts += 1
@@ -674,6 +843,7 @@ class QueueService:
             existing = await self._queue_track_ids(queue)
             existing_songs = await self._queue_song_ids(queue)
             blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+            added_any = False
             for candidate in candidates:
                 if len(queue) >= target_size:
                     break
@@ -693,8 +863,15 @@ class QueueService:
                     queue.append(item)
                     existing.add(item.provider_track_id)
                     existing_songs.add(item.song_id)
+                    added_any = True
                 except ValueError:
                     continue
+            if not added_any and query_idx >= len(queries) * 2:
+                break
+
+        if len(queue) < target_size:
+            queue = await self._append_home_discovery(session, user_id, queue, target_size)
+
         queue = await self._dedupe_queue(session, queue)
         return queue
 

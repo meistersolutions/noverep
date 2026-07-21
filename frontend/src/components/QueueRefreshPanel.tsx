@@ -1,31 +1,55 @@
-import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, Filter, Loader2, RefreshCw, X } from 'lucide-react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { ChevronDown, ChevronUp, Filter, Loader2, Plus, RefreshCw, X } from 'lucide-react';
 import { LanguageMultiSelect } from '@/components/LanguageMultiSelect';
 import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
 import { effectiveLanguages } from '@/lib/languages';
 import { usePlayerStore } from '@/stores/playerStore';
 import type { QueueRefreshOptions } from '@/lib/api';
 
+const MAX_SEEDS = 5;
+
 interface QueueRefreshPanelProps {
-  query: string;
-  onQueryChange: (value: string) => void;
-  onRefresh: (query: string | null, options: QueueRefreshOptions) => Promise<void>;
+  seeds: string[];
+  onSeedsChange: (seeds: string[]) => void;
+  onRefresh: (seeds: string[] | null, options: QueueRefreshOptions) => Promise<void>;
   refreshing?: boolean;
 }
 
+function normalizeSeedList(seeds: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of seeds) {
+    const q = raw.trim();
+    if (!q) continue;
+    const key = q.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(q);
+    if (out.length >= MAX_SEEDS) break;
+  }
+  return out;
+}
+
 export function QueueRefreshPanel({
-  query,
-  onQueryChange,
+  seeds,
+  onSeedsChange,
   onRefresh,
   refreshing = false,
 }: QueueRefreshPanelProps) {
   const preferences = usePlayerStore((s) => s.preferences);
-  const activeSearch = preferences?.active_search_query;
+  const activeSeedKey = (
+    preferences?.active_search_queries?.length
+      ? preferences.active_search_queries
+      : preferences?.active_search_query
+        ? [preferences.active_search_query]
+        : []
+  ).join('\0');
+  const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(true);
   const [languages, setLanguages] = useState<string[]>([]);
   const [yearFrom, setYearFrom] = useState<number | null>(null);
   const [yearTo, setYearTo] = useState<number | null>(null);
-  const lastHydratedSeed = useRef<string | null | undefined>(undefined);
+  const lastHydratedKey = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!preferences) return;
@@ -34,13 +58,13 @@ export function QueueRefreshPanel({
     setYearTo(preferences.discovery_year_to);
   }, [preferences]);
 
-  // Hydrate the input when the saved seed changes — do NOT re-fill when the user clears the field.
+  // Hydrate chips when saved seeds change — do NOT re-fill after the user clears them.
   useEffect(() => {
-    const seed = activeSearch ?? null;
-    if (seed === lastHydratedSeed.current) return;
-    lastHydratedSeed.current = seed;
-    if (seed) onQueryChange(seed);
-  }, [activeSearch, onQueryChange]);
+    if (activeSeedKey === lastHydratedKey.current) return;
+    lastHydratedKey.current = activeSeedKey;
+    const next = activeSeedKey ? activeSeedKey.split('\0') : [];
+    if (next.length) onSeedsChange(next);
+  }, [activeSeedKey, onSeedsChange]);
 
   const buildOptions = (): QueueRefreshOptions => ({
     languages,
@@ -48,11 +72,31 @@ export function QueueRefreshPanel({
     yearTo,
   });
 
-  const handleRefresh = async () => {
-    await onRefresh(query.trim() || null, buildOptions());
+  const addSeed = (raw: string) => {
+    const next = normalizeSeedList([...seeds, raw]);
+    onSeedsChange(next);
+    setDraft('');
   };
 
-  const clearQuery = () => onQueryChange('');
+  const removeSeed = (seed: string) => {
+    onSeedsChange(seeds.filter((s) => s.toLowerCase() !== seed.toLowerCase()));
+  };
+
+  const handleDraftKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (draft.trim()) addSeed(draft);
+    }
+  };
+
+  const handleRefresh = async () => {
+    const pending = draft.trim() ? normalizeSeedList([...seeds, draft]) : seeds;
+    if (draft.trim()) {
+      onSeedsChange(pending);
+      setDraft('');
+    }
+    await onRefresh(pending.length ? pending : null, buildOptions());
+  };
 
   if (!preferences) {
     return <div className="glass h-32 animate-pulse rounded-xl" />;
@@ -61,33 +105,72 @@ export function QueueRefreshPanel({
   return (
     <section className="glass overflow-hidden space-y-0">
       <div className="p-4 space-y-3 border-b border-white/10">
-        <label className="text-sm font-medium">Queue seed (optional)</label>
+        <label className="text-sm font-medium">Queue seeds (optional)</label>
         <p className="text-xs text-white/50">
-          Enter a search to build upcoming tracks from that query. Leave empty to refresh from your
-          saved preferences. To replay a favorite song, use Search instead.
+          Add up to {MAX_SEEDS} searches. We rotate across them to mix niches into your queue. Leave
+          empty to refresh from your saved preferences. If the queue runs dry, home discovery songs
+          fill in.
         </p>
+
+        {seeds.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {seeds.map((seed) => (
+              <span
+                key={seed}
+                className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2.5 py-1 text-sm"
+              >
+                {seed}
+                <button
+                  type="button"
+                  onClick={() => removeSeed(seed)}
+                  className="p-0.5 rounded text-white/50 hover:text-white hover:bg-white/10"
+                  aria-label={`Remove seed ${seed}`}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <div className="flex gap-2">
           <div className="relative flex-1 min-w-0">
             <input
               type="text"
               inputMode="search"
-              enterKeyHint="search"
-              value={query}
-              onChange={(e) => onQueryChange(e.target.value)}
-              placeholder="e.g. Ilaiyaraaja, rock 90s… (optional)"
-              className="w-full bg-surface-raised border border-white/10 rounded-lg px-4 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50"
+              enterKeyHint="done"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleDraftKey}
+              disabled={seeds.length >= MAX_SEEDS}
+              placeholder={
+                seeds.length >= MAX_SEEDS
+                  ? `Maximum ${MAX_SEEDS} seeds`
+                  : 'e.g. Ilaiyaraaja, coldplay…'
+              }
+              className="w-full bg-surface-raised border border-white/10 rounded-lg px-4 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
             />
-            {query ? (
+            {draft ? (
               <button
                 type="button"
-                onClick={clearQuery}
+                onClick={() => setDraft('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10"
-                aria-label="Clear search"
+                aria-label="Clear draft"
               >
                 <X className="w-4 h-4" />
               </button>
             ) : null}
           </div>
+          <button
+            type="button"
+            onClick={() => draft.trim() && addSeed(draft)}
+            disabled={!draft.trim() || seeds.length >= MAX_SEEDS}
+            className="btn-ghost px-3 shrink-0 flex items-center gap-1.5 text-sm border border-white/10 disabled:opacity-40"
+            aria-label="Add seed"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">Add</span>
+          </button>
           <button
             type="button"
             onClick={handleRefresh}
@@ -98,9 +181,15 @@ export function QueueRefreshPanel({
             <span className="hidden sm:inline">Refresh queue</span>
           </button>
         </div>
-        {activeSearch && (
+        {activeSeedKey && (
           <p className="text-xs text-accent/90">
-            Active seed: <span className="font-medium">&ldquo;{activeSearch}&rdquo;</span>
+            Active seeds:{' '}
+            <span className="font-medium">
+              {activeSeedKey
+                .split('\0')
+                .map((s) => `"${s}"`)
+                .join(', ')}
+            </span>
           </p>
         )}
       </div>

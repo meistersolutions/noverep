@@ -55,6 +55,7 @@ export interface UserPreferences {
   language_preference: string | null;
   preferred_languages: string[];
   active_search_query: string | null;
+  active_search_queries: string[];
   favorite_artists: string[];
   onboarding_completed: boolean;
   preferred_genres: string[];
@@ -277,8 +278,12 @@ export const api = {
     request<QueueItem[]>(`/queue/fill?minimum=${minimum}`, { method: 'POST' }),
   syncQueue: () =>
     request<QueueItem[]>('/queue/sync', { method: 'POST' }, 90_000),
-  refreshQueue: (seed: string, options?: QueueRefreshOptions) => {
-    const params = new URLSearchParams({ seed });
+  refreshQueue: (seeds: string | string[], options?: QueueRefreshOptions) => {
+    const seedList = (Array.isArray(seeds) ? seeds : [seeds])
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    const params = new URLSearchParams({ seeds: seedList.join(',') });
     if (options?.languages?.length) params.set('languages', options.languages.join(','));
     if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
     if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
@@ -296,7 +301,7 @@ export const api = {
   clearActiveSearch: () =>
     request<UserPreferences>('/preferences', {
       method: 'PATCH',
-      body: JSON.stringify({ active_search_query: null }),
+      body: JSON.stringify({ active_search_query: null, active_search_queries: [] }),
     }),
   playNextInQueue: (
     provider: string,

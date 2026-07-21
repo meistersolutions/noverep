@@ -1,5 +1,15 @@
 apply plugin: 'com.android.application'
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    def text = keystorePropertiesFile.getText('UTF-8')
+    if (text.length() > 0 && text.charAt(0) == '\uFEFF') {
+        text = text.substring(1)
+    }
+    keystoreProperties.load(new StringReader(text))
+}
+
 android {
     namespace "com.noverep.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +17,8 @@ android {
         applicationId "com.noverep.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 16
-        versionName "1.6.5"
+        versionCode 17
+        versionName "1.6.6"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +26,32 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()
+                    && keystoreProperties['storeFile']
+                    && keystoreProperties['storePassword']
+                    && keystoreProperties['keyAlias']
+                    && keystoreProperties['keyPassword']) {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()
+                    && keystoreProperties['storeFile']
+                    && keystoreProperties['storePassword']
+                    && keystoreProperties['keyAlias']
+                    && keystoreProperties['keyPassword']) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
