@@ -356,7 +356,7 @@ async function pollDiscoverJob(jobId) {
     if (browsing) {
       await loadBrowse().catch(() => {});
     }
-    if (job.status === "completed" || job.status === "failed") {
+    if (job.status === "completed" || job.status === "failed" || job.status === "archived") {
       return job;
     }
     await new Promise((r) => setTimeout(r, 2500));
@@ -424,6 +424,8 @@ function renderJobs(jobs) {
           ? ` · film ${job.cursor_json.film_index || 0}/${job.cursor_json.films_total}`
           : "";
       const pages = (job.cursor_json?.wiki_list_pages || []).length;
+      const active = job.status === "pending" || job.status === "running";
+      const endLabel = active ? "End & archive" : "Archive";
       return `
         <article class="job-row ${escapeHtml(job.status)}" data-job-id="${escapeHtml(job.id)}">
           <div>
@@ -438,6 +440,13 @@ function renderJobs(jobs) {
           </div>
           <div class="job-actions">
             <button type="button" class="ghost job-details-btn" data-job-id="${escapeHtml(job.id)}">Details</button>
+            <button
+              type="button"
+              class="ghost danger job-end-btn"
+              data-job-id="${escapeHtml(job.id)}"
+              data-active="${active ? "1" : "0"}"
+              title="${active ? "Stop this seed and remove it from the list" : "Hide this job from the list"}"
+            >${endLabel}</button>
           </div>
         </article>
       `;
@@ -452,6 +461,29 @@ function renderJobs(jobs) {
         openJobDetails(job);
       } catch (err) {
         $("status").textContent = err.message || String(err);
+      }
+    });
+  });
+
+  host.querySelectorAll(".job-end-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-job-id");
+      const active = btn.getAttribute("data-active") === "1";
+      const confirmMsg = active
+        ? "End this seed discovery and archive it? Progress so far is kept; the job will stop."
+        : "Archive this job and hide it from the list?";
+      if (!window.confirm(confirmMsg)) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/discover/jobs/${id}/end`, { method: "POST" });
+        $("status").textContent = active
+          ? "Seed ended and archived."
+          : "Job archived.";
+        await refreshJobs();
+        if (browsing) await loadBrowse().catch(() => {});
+      } catch (err) {
+        $("status").textContent = err.message || String(err);
+        btn.disabled = false;
       }
     });
   });

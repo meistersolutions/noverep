@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -9,6 +11,8 @@ from app.schemas import (
     DiscoverRequest,
     DiscoverResponse,
     EnrichStatusOut,
+    PlaylistExportRequest,
+    PlaylistExportResponse,
     ResolveYoutubeRequest,
     ResolveYoutubeResult,
     SampleRequest,
@@ -19,6 +23,7 @@ from app.schemas import (
 )
 from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
+from app.services.playlist_export import export_playlist
 from app.services.youtube_resolve import (
     resolve_unmapped,
     resolve_one_song,
@@ -233,13 +238,43 @@ def discover_job(job_id: str, db: Session = Depends(get_db)):
     return job
 
 
+@router.post("/discover/jobs/{job_id}/end", response_model=DiscoverJobOut)
+def end_and_archive_discover_job(
+    job_id: str, db: Session = Depends(get_db)
+) -> DiscoverJob:
+    """Stop a pending/running seed job and archive it off the home list."""
+    job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
+    if not job:
+        raise HTTPException(404, "Discover job not found")
+    if job.status == "archived":
+        return job
+    now = datetime.now(timezone.utc)
+    was_active = job.status in {"pending", "running"}
+    job.status = "archived"
+    job.phase = "stopped" if was_active else (job.phase or "done")
+    job.message = (
+        "Ended and archived by user"
+        if was_active
+        else (job.message or "Archived")
+    )
+    if was_active or job.finished_at is None:
+        job.finished_at = now
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 @router.get("/discover/jobs", response_model=list[DiscoverJobOut])
 def list_discover_jobs(
     limit: int = Query(default=20, ge=1, le=50),
     active_only: bool = Query(default=False),
+    include_archived: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    """List discover jobs. Active (pending/running) are listed first."""
+    """List discover jobs. Active (pending/running) are listed first.
+
+    Archived jobs are hidden unless include_archived=true.
+    """
     active = (
         db.query(DiscoverJob)
         .filter(DiscoverJob.status.in_(("pending", "running")))
@@ -251,12 +286,13 @@ def list_discover_jobs(
     remaining = max(limit - len(active), 0)
     recent: list[DiscoverJob] = []
     if remaining:
+        finished_q = db.query(DiscoverJob).filter(
+            ~DiscoverJob.status.in_(("pending", "running"))
+        )
+        if not include_archived:
+            finished_q = finished_q.filter(DiscoverJob.status != "archived")
         recent = (
-            db.query(DiscoverJob)
-            .filter(~DiscoverJob.status.in_(("pending", "running")))
-            .order_by(DiscoverJob.created_at.desc())
-            .limit(remaining)
-            .all()
+            finished_q.order_by(DiscoverJob.created_at.desc()).limit(remaining).all()
         )
     return active + recent
 
@@ -335,6 +371,12 @@ async def resolve_youtube(body: ResolveYoutubeRequest, db: Session = Depends(get
     return await resolve_unmapped(
         db, limit=body.limit, composer=body.composer, dry_run=body.dry_run
     )
+
+
+@router.post("/playlists/export", response_model=PlaylistExportResponse)
+def playlists_export(body: PlaylistExportRequest, db: Session = Depends(get_db)):
+    """Build a YouTube playlist payload from mapped library songs."""
+    return export_playlist(db, body)
 
 
 @router.post("/resolve/popularity")

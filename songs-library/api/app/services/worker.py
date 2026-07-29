@@ -1,14 +1,10 @@
 from __future__ import annotations
-
 import asyncio
 from datetime import datetime, timezone
-
 from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.db import SessionLocal
 from app.models import DiscoverJob
-from app.schemas import SongCreate
 from app.services.discover import merge_and_upsert_works, resolve_seed_meta
 from app.services import enrich, musicbrainz, wikipedia, wikidata
 from app.services.youtube_resolve import resolve_unmapped, refresh_popularity_from_views
@@ -18,29 +14,45 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_stopped(status: str | None) -> bool:
+    return (status or "").lower() in {"cancelled", "archived"}
+
+
+def _reload_active_job(db: Session, job_id: str) -> DiscoverJob | None:
+    """Return the job if it is still allowed to run; else None."""
+    job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
+    if not job or _is_stopped(job.status):
+        return None
+    return job
+
+
 async def run_discover_job(job_id: str) -> None:
     db = SessionLocal()
     try:
         job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
-        if not job:
+        if not job or _is_stopped(job.status):
             return
         job.status = "running"
         job.phase = "resolve"
         job.message = "Resolving composer…"
         db.commit()
-
         qid, label = await resolve_seed_meta(job.seed)
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         composer_name = label or job.seed.strip()
         job.entity_id = qid
         job.entity_label = label
         job.phase = "wikipedia_lists"
         job.message = f"Scanning Wikipedia song lists for {composer_name}…"
         db.commit()
-
         # Phase 1: full Wikipedia song-list pages (no artificial cap).
         wiki_works, list_pages = await wikipedia.fetch_composer_songs_detailed(
             composer_name, limit=None
         )
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         cursor: dict = {
             "wiki_list_pages": list_pages,
             "filmography_pages": [],
@@ -50,7 +62,6 @@ async def run_discover_job(job_id: str) -> None:
         }
         job.cursor_json = dict(cursor)
         db.commit()
-
         wd_works: list[dict] = []
         if qid:
             try:
@@ -60,11 +71,15 @@ async def run_discover_job(job_id: str) -> None:
                 for w in wd_works:
                     w.setdefault("source", "wikidata_sparql")
             except Exception as exc:  # noqa: BLE001
+                job = _reload_active_job(db, job_id)
+                if not job:
+                    return
                 job.message = f"Wikidata partial failure: {exc}"
-
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         for w in wiki_works:
             w.setdefault("source", "wikipedia")
-
         stats = merge_and_upsert_works(
             db,
             works=wiki_works + wd_works,
@@ -79,7 +94,9 @@ async def run_discover_job(job_id: str) -> None:
         job.pages_done = len(list_pages) or 1
         job.cursor_json = dict(cursor)
         db.commit()
-
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         # Phase 2: page-to-page film soundtrack crawl.
         job.phase = "wikipedia_films"
         job.message = "Walking filmography pages for soundtrack tables…"
@@ -89,18 +106,25 @@ async def run_discover_job(job_id: str) -> None:
         except Exception as exc:  # noqa: BLE001
             films = []
             filmography_pages = []
+            job = _reload_active_job(db, job_id)
+            if not job:
+                return
             job.message = f"Film list failed: {exc}"
             db.commit()
-
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         cursor["filmography_pages"] = filmography_pages
         cursor["film_index"] = 0
         cursor["films_total"] = len(films)
         job.cursor_json = dict(cursor)
         db.commit()
-
         batch = settings.discover_films_per_tick
         film_pages: list[str] = []
         for i, film in enumerate(films):
+            job = _reload_active_job(db, job_id)
+            if not job:
+                return
             cursor["film_index"] = i + 1
             job.cursor_json = dict(cursor)
             job.pages_done = len(list_pages) + i + 1
@@ -115,6 +139,9 @@ async def run_discover_job(job_id: str) -> None:
                 )
             except Exception:  # noqa: BLE001
                 works, film_page = [], None
+            job = _reload_active_job(db, job_id)
+            if not job:
+                return
             if film_page and film_page not in film_pages:
                 film_pages.append(film_page)
                 cursor["film_pages"] = film_pages
@@ -136,21 +163,28 @@ async def run_discover_job(job_id: str) -> None:
             # Keep event loop responsive; still continuous within one job.
             if (i + 1) % batch == 0:
                 await asyncio.sleep(0.05)
-
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         cursor["film_pages"] = film_pages
         job.cursor_json = dict(cursor)
         db.commit()
-
         # Phase 3: MusicBrainz pagination.
         job.phase = "musicbrainz"
         job.message = "Paging MusicBrainz works…"
         db.commit()
         try:
             mb_id, _ = await musicbrainz.resolve_artist_id(composer_name)
+            job = _reload_active_job(db, job_id)
+            if not job:
+                return
             if mb_id:
                 mb_works = await musicbrainz.fetch_artist_works(
                     mb_id, limit=settings.discover_musicbrainz_limit
                 )
+                job = _reload_active_job(db, job_id)
+                if not job:
+                    return
                 stats = merge_and_upsert_works(
                     db,
                     works=mb_works,
@@ -163,8 +197,13 @@ async def run_discover_job(job_id: str) -> None:
                 job.updated += stats["updated"]
                 job.found += stats["found"]
         except Exception as exc:  # noqa: BLE001
+            job = _reload_active_job(db, job_id)
+            if not job:
+                return
             job.message = f"MusicBrainz partial failure: {exc}"
-
+        job = _reload_active_job(db, job_id)
+        if not job:
+            return
         job.phase = "done"
         job.status = "completed"
         job.message = (
@@ -175,7 +214,7 @@ async def run_discover_job(job_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
-        if job:
+        if job and not _is_stopped(job.status):
             job.status = "failed"
             job.error = str(exc)
             job.message = str(exc)
@@ -245,7 +284,6 @@ async def discover_queue_loop(stop_event: asyncio.Event) -> None:
                 job_id = job.id
         finally:
             db.close()
-
         if job_id:
             await run_discover_job(job_id)
         else:

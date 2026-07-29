@@ -84,6 +84,14 @@ button.ghost {
   color: var(--muted);
   min-width: auto;
 }
+button.ghost.danger {
+  border-color: rgba(255, 100, 100, 0.35);
+  color: #ff9b9b;
+}
+button.ghost.danger:hover {
+  border-color: rgba(255, 100, 100, 0.55);
+  color: #ffc0c0;
+}
 .add-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -302,6 +310,8 @@ button:disabled { opacity: 0.5; cursor: wait; }
   display: flex;
   gap: 0.4rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .job-details {
   border: none;

@@ -47,8 +47,11 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 - `POST /api/songs` — manual add
 - `PATCH /api/songs/{id}` — update
 - `POST /api/discover` — Wikidata discovery for seeds
+- `POST /api/discover/jobs/{id}/end` — end a running/pending seed and archive it (hides from home list)
+- `GET /api/discover/jobs` — list discover jobs (archived hidden by default)
 - `POST /api/sample` — unheard batch for NoRepeat queue
 - `POST /api/resolve/youtube` — resolve YouTube ids for unmapped songs
+- `POST /api/playlists/export` — export mapped songs as a YouTube playlist payload
 
 ## NoRepeat
 
