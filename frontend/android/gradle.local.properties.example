@@ -1,0 +1,4 @@
+# Copy to gradle.local.properties (gitignored) to pin JDK for Gradle on Windows.
+# Fixes "JAVA_HOME is set to an invalid directory" when system env vars are wrong.
+#
+# org.gradle.java.home=C:/Program Files/Android/Android Studio/jbr

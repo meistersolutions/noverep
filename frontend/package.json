@@ -16,6 +16,8 @@
     "cap:run:android": "npm run cap:sync && npx cap run android",
     "cap:apk": "npm run cap:sync && cd android && .\\gradlew.bat assembleDebug",
     "cap:deploy:android": "node scripts/deploy-android.mjs",
+    "cap:deploy:android:win": "powershell -ExecutionPolicy Bypass -File scripts/deploy-android.ps1",
+    "cap:check-java": "powershell -ExecutionPolicy Bypass -File scripts/ensure-java-home.ps1",
     "cap:release": "npm run cap:sync && cd android && .\\gradlew.bat assembleRelease",
     "cap:aab": "npm run cap:sync && cd android && .\\gradlew.bat bundleRelease",
     "cap:patch-native": "node scripts/patch-native-background.mjs",
