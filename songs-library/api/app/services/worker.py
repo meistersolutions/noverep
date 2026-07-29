@@ -11,7 +11,7 @@ from app.models import DiscoverJob
 from app.schemas import SongCreate
 from app.services.discover import merge_and_upsert_works, resolve_seed_meta
 from app.services import enrich, musicbrainz, wikipedia, wikidata
-from app.services.youtube_resolve import resolve_unmapped
+from app.services.youtube_resolve import resolve_unmapped, refresh_popularity_from_views
 
 
 def _utcnow() -> datetime:
@@ -202,7 +202,7 @@ async def enrich_loop(stop_event: asyncio.Event) -> None:
 
 
 async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
-    """Background: map unmapped catalog songs to YouTube video ids."""
+    """Background: map unmapped songs, then refresh popularity from YouTube views."""
     while not stop_event.is_set():
         db = SessionLocal()
         try:
@@ -212,7 +212,15 @@ async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
                 dry_run=False,
             )
             if result.attempted == 0:
-                await asyncio.sleep(settings.youtube_resolve_idle_seconds)
+                stats = await refresh_popularity_from_views(
+                    db,
+                    limit=settings.youtube_resolve_batch_size,
+                    force=False,
+                )
+                if stats["attempted"] == 0:
+                    await asyncio.sleep(settings.youtube_resolve_idle_seconds)
+                else:
+                    await asyncio.sleep(settings.youtube_resolve_pause_seconds)
             else:
                 await asyncio.sleep(settings.youtube_resolve_pause_seconds)
         except Exception:  # noqa: BLE001

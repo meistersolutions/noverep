@@ -29,6 +29,7 @@ class Song(Base):
     wikidata_id: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
     musicbrainz_id: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
     youtube_video_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    youtube_view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     wikipedia_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     playability: Mapped[str] = mapped_column(String(32), default="metadata_only")

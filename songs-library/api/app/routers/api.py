@@ -19,7 +19,11 @@ from app.schemas import (
 )
 from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
-from app.services.youtube_resolve import resolve_unmapped, resolve_one_song
+from app.services.youtube_resolve import (
+    resolve_unmapped,
+    resolve_one_song,
+    refresh_popularity_from_views,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -331,3 +335,13 @@ async def resolve_youtube(body: ResolveYoutubeRequest, db: Session = Depends(get
     return await resolve_unmapped(
         db, limit=body.limit, composer=body.composer, dry_run=body.dry_run
     )
+
+
+@router.post("/resolve/popularity")
+async def resolve_popularity(
+    limit: int = Query(default=25, ge=1, le=100),
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    """Refresh popularity scores from YouTube view counts for mapped songs."""
+    return await refresh_popularity_from_views(db, limit=limit, force=force)

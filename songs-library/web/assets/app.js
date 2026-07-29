@@ -51,6 +51,19 @@ const COLUMNS = [
     label: "Popularity",
     get: (s) => (s.popularity == null ? "" : String(Math.round(s.popularity))),
   },
+  {
+    key: "youtube_view_count",
+    label: "YT views",
+    get: (s) => {
+      if (s.youtube_view_count == null) return "";
+      const n = Number(s.youtube_view_count);
+      if (!Number.isFinite(n)) return "";
+      if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+      if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+      if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+      return String(n);
+    },
+  },
   { key: "playability", label: "Playability", get: (s) => s.playability || "" },
   {
     key: "discovered_via",

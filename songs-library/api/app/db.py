@@ -58,6 +58,7 @@ def init_db() -> None:
             "ALTER TABLE songs ADD COLUMN directors JSON",
             "ALTER TABLE songs ADD COLUMN actors JSON",
             "ALTER TABLE songs ADD COLUMN actresses JSON",
+            "ALTER TABLE songs ADD COLUMN youtube_view_count INTEGER",
         ]
     else:
         alters = [
@@ -70,6 +71,7 @@ def init_db() -> None:
             "ALTER TABLE songs ADD COLUMN IF NOT EXISTS directors JSON DEFAULT '[]'",
             "ALTER TABLE songs ADD COLUMN IF NOT EXISTS actors JSON DEFAULT '[]'",
             "ALTER TABLE songs ADD COLUMN IF NOT EXISTS actresses JSON DEFAULT '[]'",
+            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS youtube_view_count INTEGER",
         ]
     with engine.begin() as conn:
         for stmt in alters:

@@ -19,6 +19,7 @@ class SongCreate(BaseModel):
     wikidata_id: str | None = None
     musicbrainz_id: str | None = None
     youtube_video_id: str | None = None
+    youtube_view_count: int | None = None
     wikipedia_title: str | None = None
     discovered_via: str | None = None
     seed_query: str | None = None
@@ -39,6 +40,7 @@ class SongUpdate(BaseModel):
     popularity: float | None = Field(default=None, ge=0, le=100)
     moods: list[str] | None = None
     youtube_video_id: str | None = None
+    youtube_view_count: int | None = None
     playability: str | None = None
     extra: dict | None = None
 
@@ -61,6 +63,7 @@ class SongOut(BaseModel):
     wikidata_id: str | None
     musicbrainz_id: str | None
     youtube_video_id: str | None
+    youtube_view_count: int | None = None
     wikipedia_title: str | None
     playability: str
     discovered_via: str | None
