@@ -231,15 +231,30 @@ def discover_job(job_id: str, db: Session = Depends(get_db)):
 
 @router.get("/discover/jobs", response_model=list[DiscoverJobOut])
 def list_discover_jobs(
-    limit: int = Query(default=10, ge=1, le=50),
+    limit: int = Query(default=20, ge=1, le=50),
+    active_only: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    return (
+    """List discover jobs. Active (pending/running) are listed first."""
+    active = (
         db.query(DiscoverJob)
+        .filter(DiscoverJob.status.in_(("pending", "running")))
         .order_by(DiscoverJob.created_at.desc())
-        .limit(limit)
         .all()
     )
+    if active_only:
+        return active[:limit]
+    remaining = max(limit - len(active), 0)
+    recent: list[DiscoverJob] = []
+    if remaining:
+        recent = (
+            db.query(DiscoverJob)
+            .filter(~DiscoverJob.status.in_(("pending", "running")))
+            .order_by(DiscoverJob.created_at.desc())
+            .limit(remaining)
+            .all()
+        )
+    return active + recent
 
 
 @router.get("/enrich/status", response_model=EnrichStatusOut)

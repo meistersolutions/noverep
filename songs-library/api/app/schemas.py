@@ -109,6 +109,8 @@ class DiscoverJobOut(BaseModel):
     message: str | None = None
     error: str | None = None
     cursor_json: dict | None = None
+    created_at: datetime | None = None
+    finished_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

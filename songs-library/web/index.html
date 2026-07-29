@@ -30,6 +30,33 @@
       autocomplete="off"
     />
     <button id="discover" type="button" class="accent">Discover</button>
+    <button id="toggle-add" type="button" class="ghost">Add song</button>
+  </section>
+
+  <section id="add-panel" class="add-panel" hidden>
+    <h2>Add song manually</h2>
+    <div class="add-grid">
+      <label>
+        <span>Song name *</span>
+        <input id="add-song" type="text" required autocomplete="off" />
+      </label>
+      <label>
+        <span>Movie</span>
+        <input id="add-movie" type="text" autocomplete="off" />
+      </label>
+      <label>
+        <span>Composer</span>
+        <input id="add-composer" type="text" autocomplete="off" />
+      </label>
+      <label>
+        <span>Year</span>
+        <input id="add-year" type="text" inputmode="numeric" autocomplete="off" />
+      </label>
+    </div>
+    <div class="add-actions">
+      <button id="add-submit" type="button" class="accent">Save</button>
+      <button id="add-cancel" type="button" class="ghost">Cancel</button>
+    </div>
   </section>
 
   <section id="year-range" class="year-range">
@@ -60,6 +87,31 @@
   </section>
 
   <p id="status" class="status"></p>
+
+  <section id="jobs-panel" class="jobs-panel">
+    <div class="jobs-head">
+      <h2>Background discovery</h2>
+      <p class="jobs-hint">Seeds queued or running. Open Details to see Wikipedia pages used.</p>
+    </div>
+    <div id="jobs-list" class="jobs-list">
+      <p class="meta">No discovery jobs yet.</p>
+    </div>
+  </section>
+
+  <dialog id="job-details" class="job-details">
+    <form method="dialog" class="job-details-inner">
+      <header>
+        <div>
+          <p class="eyebrow" id="job-details-status">Job</p>
+          <h2 id="job-details-title">Seed</h2>
+          <p class="meta" id="job-details-meta"></p>
+        </div>
+        <button type="submit" class="ghost" value="close">Close</button>
+      </header>
+      <div id="job-details-body" class="job-details-body"></div>
+    </form>
+  </dialog>
+
   <div id="list" class="list" hidden></div>
   <script src="/assets/app.js"></script>
 </body>

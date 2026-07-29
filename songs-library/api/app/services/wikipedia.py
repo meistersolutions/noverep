@@ -412,8 +412,13 @@ async def _parse_page_works(
     return works[:limit] if limit else works
 
 
-async def list_composer_films(label: str) -> list[dict[str, Any]]:
-    """Collect film titles from discography / film-score decade pages."""
+async def list_composer_films(
+    label: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Collect film titles from discography / film-score decade pages.
+
+    Returns (films, wikipedia_pages_visited).
+    """
     async with httpx.AsyncClient(timeout=90.0, headers=_headers()) as client:
         pages = await _resolve_song_list_pages(client, label)
         pages = [
@@ -453,13 +458,16 @@ async def list_composer_films(label: str) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         out.append(f)
-    return out
+    return out, sorted(seen_pages)
 
 
 async def fetch_film_soundtrack_songs(
     film_name: str, *, year: int | None = None
-) -> list[dict[str, Any]]:
-    """Parse a film Wikipedia page for soundtrack / tracklist tables."""
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Parse a film Wikipedia page for soundtrack / tracklist tables.
+
+    Returns (works, wikipedia_page_title_or_none).
+    """
     async with httpx.AsyncClient(timeout=60.0, headers=_headers()) as client:
         title = await _page_exists(client, film_name)
         if not title:
@@ -475,7 +483,7 @@ async def fetch_film_soundtrack_songs(
             titles = data[1] if isinstance(data, list) and len(data) > 1 else []
             title = titles[0] if titles else None
         if not title:
-            return []
+            return [], None
         page_title, _html, tables = await _parse_page_html(client, title)
         works = _tables_to_works(tables, page_title=page_title)
         for w in works:
@@ -484,7 +492,7 @@ async def fetch_film_soundtrack_songs(
             if not w.get("release_year") and year:
                 w["release_year"] = year
             w["source"] = "wikipedia_film"
-        return works
+        return works, page_title
 
 
 def _dedupe_works(works: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -505,7 +513,14 @@ def _dedupe_works(works: list[dict[str, Any]]) -> list[dict[str, Any]]:
 async def fetch_composer_songs(
     label: str, limit: int | None = None
 ) -> list[dict[str, Any]]:
-    """Discover songs from Wikipedia list pages. limit=None means all rows."""
+    works, _pages = await fetch_composer_songs_detailed(label, limit=limit)
+    return works
+
+
+async def fetch_composer_songs_detailed(
+    label: str, limit: int | None = None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Discover songs from Wikipedia list pages. Returns (works, pages_used)."""
     async with httpx.AsyncClient(timeout=90.0, headers=_headers()) as client:
         pages = await _resolve_song_list_pages(client, label)
         pages.sort(
@@ -516,15 +531,19 @@ async def fetch_composer_songs(
             )
         )
         all_works: list[dict[str, Any]] = []
+        pages_used: list[str] = []
         for title in pages:
             try:
                 remaining = None if limit is None else max(limit - len(all_works), 0)
                 if remaining == 0:
                     break
+                before = len(all_works)
                 all_works.extend(await _parse_page_works(client, title, limit=remaining))
+                pages_used.append(title)
             except Exception:  # noqa: BLE001
                 continue
             if limit is not None and len(all_works) >= limit:
                 break
     deduped = _dedupe_works(all_works)
-    return deduped if limit is None else deduped[:limit]
+    works = deduped if limit is None else deduped[:limit]
+    return works, pages_used

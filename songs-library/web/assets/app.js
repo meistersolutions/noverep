@@ -335,10 +335,11 @@ async function pollDiscoverJob(jobId) {
       ? ` · film ${job.cursor_json.film_index}/${job.cursor_json.films_total || "?"}`
       : "";
     $("status").textContent =
-      `${job.phase}: ${job.message || job.status}` +
+      `${job.seed}: ${job.phase} — ${job.message || job.status}` +
       ` · inserted ${job.inserted}, updated ${job.updated}` +
       filmProgress;
     await refreshStats().catch(() => {});
+    await refreshJobs().catch(() => {});
     if (browsing) {
       await loadBrowse().catch(() => {});
     }
@@ -348,6 +349,113 @@ async function pollDiscoverJob(jobId) {
     await new Promise((r) => setTimeout(r, 2500));
   }
   throw new Error("Discover job timed out waiting for completion");
+}
+
+function wikiUrl(title) {
+  return `https://en.wikipedia.org/wiki/${encodeURIComponent(String(title).replace(/ /g, "_"))}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function pageListHtml(pages, emptyLabel) {
+  if (!pages?.length) {
+    return `<p class="meta">${escapeHtml(emptyLabel)}</p>`;
+  }
+  return `<ul class="wiki-pages">${pages
+    .map(
+      (title) =>
+        `<li><a href="${wikiUrl(title)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a></li>`,
+    )
+    .join("")}</ul>`;
+}
+
+function openJobDetails(job) {
+  const cursor = job.cursor_json || {};
+  const listPages = cursor.wiki_list_pages || [];
+  const filmographyPages = cursor.filmography_pages || [];
+  const filmPages = cursor.film_pages || [];
+  $("job-details-status").textContent = `${job.status} · ${job.phase}`;
+  $("job-details-title").textContent = job.entity_label || job.seed;
+  $("job-details-meta").textContent =
+    `Seed “${job.seed}” · inserted ${job.inserted}, updated ${job.updated}, skipped ${job.skipped}` +
+    (job.message ? ` · ${job.message}` : "");
+  $("job-details-body").innerHTML = `
+    <h3>Song list / discography pages</h3>
+    ${pageListHtml(listPages, "No Wikipedia list pages recorded yet for this seed.")}
+    <h3>Filmography source pages</h3>
+    ${pageListHtml(filmographyPages, "No filmography pages recorded yet.")}
+    <h3>Film pages scanned for soundtracks</h3>
+    ${pageListHtml(filmPages, "No film soundtrack pages recorded yet.")}
+    ${job.error ? `<h3>Error</h3><p class="meta">${escapeHtml(job.error)}</p>` : ""}
+  `;
+  $("job-details").showModal();
+}
+
+function renderJobs(jobs) {
+  const host = $("jobs-list");
+  if (!jobs?.length) {
+    host.innerHTML = `<p class="meta">No discovery jobs yet. Enter a seed and click Discover.</p>`;
+    return;
+  }
+  host.innerHTML = jobs
+    .map((job) => {
+      const label = job.entity_label || job.seed;
+      const filmProgress =
+        job.cursor_json?.films_total
+          ? ` · film ${job.cursor_json.film_index || 0}/${job.cursor_json.films_total}`
+          : "";
+      const pages = (job.cursor_json?.wiki_list_pages || []).length;
+      return `
+        <article class="job-row ${escapeHtml(job.status)}" data-job-id="${escapeHtml(job.id)}">
+          <div>
+            <p class="job-seed">${escapeHtml(label)}</p>
+            <p class="job-meta">
+              <span class="job-badge ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+              ${escapeHtml(job.phase)}${filmProgress}
+              · inserted ${job.inserted}
+              ${pages ? ` · ${pages} wiki list page(s)` : ""}
+              ${job.message ? `<br>${escapeHtml(job.message)}` : ""}
+            </p>
+          </div>
+          <div class="job-actions">
+            <button type="button" class="ghost job-details-btn" data-job-id="${escapeHtml(job.id)}">Details</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  host.querySelectorAll(".job-details-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-job-id");
+      try {
+        const job = await api(`/api/discover/jobs/${id}`);
+        openJobDetails(job);
+      } catch (err) {
+        $("status").textContent = err.message || String(err);
+      }
+    });
+  });
+}
+
+async function refreshJobs() {
+  const jobs = await api("/api/discover/jobs?limit=20");
+  renderJobs(jobs);
+  return jobs;
+}
+
+let jobsPollTimer = null;
+function startJobsPolling() {
+  if (jobsPollTimer) return;
+  jobsPollTimer = setInterval(() => {
+    refreshJobs().catch(() => {});
+  }, 4000);
 }
 
 async function discover() {
@@ -373,15 +481,26 @@ async function discover() {
     });
     browsing = true;
     $("browse").classList.add("active");
+    startJobsPolling();
+    await refreshJobs();
 
     if (result.job_ids?.length) {
-      const job = await pollDiscoverJob(result.job_ids[0]);
-      const err = job.error ? ` — ${job.error}` : "";
       $("status").textContent =
-        `Discovery ${job.status}: inserted ${job.inserted}, updated ${job.updated}, skipped ${job.skipped}` +
-        (job.entity_label ? ` (${job.entity_label})` : "") +
-        err;
-      await loadBrowse();
+        `Discovery queued for “${seed}”. Watching progress in Background discovery…`;
+      // Follow this job in the status line, but keep the jobs list as the main view.
+      pollDiscoverJob(result.job_ids[0])
+        .then(async (job) => {
+          const err = job.error ? ` — ${job.error}` : "";
+          $("status").textContent =
+            `Discovery ${job.status}: inserted ${job.inserted}, updated ${job.updated}, skipped ${job.skipped}` +
+            (job.entity_label ? ` (${job.entity_label})` : "") +
+            err;
+          await refreshJobs();
+          if (browsing) await loadBrowse();
+        })
+        .catch((err) => {
+          $("status").textContent = err.message || String(err);
+        });
     } else {
       const row = result.results?.[0];
       const err = row?.error ? ` — ${row.error}` : "";
@@ -439,3 +558,67 @@ $("browse").addEventListener("click", async () => {
 
 bindYearRange();
 refreshStats().catch((e) => ($("status").textContent = e.message));
+refreshJobs()
+  .then((jobs) => {
+    if (jobs?.some((j) => j.status === "pending" || j.status === "running")) {
+      startJobsPolling();
+    }
+  })
+  .catch((e) => ($("status").textContent = e.message));
+
+function toggleAddPanel(show) {
+  const panel = $("add-panel");
+  panel.hidden = !show;
+  if (show) $("add-song").focus();
+}
+
+async function submitManualAdd() {
+  const songName = $("add-song").value.trim();
+  if (!songName) {
+    $("status").textContent = "Song name is required.";
+    $("add-song").focus();
+    return;
+  }
+  const yearRaw = $("add-year").value.trim();
+  let releaseYear = null;
+  if (yearRaw) {
+    const yearResult = validateYearField(yearRaw);
+    if (yearResult.error) {
+      $("status").textContent = yearResult.error;
+      return;
+    }
+    releaseYear = yearResult.value;
+  }
+  $("add-submit").disabled = true;
+  try {
+    await api("/api/songs", {
+      method: "POST",
+      body: JSON.stringify({
+        song_name: songName,
+        movie_name: $("add-movie").value.trim() || null,
+        composer_name: $("add-composer").value.trim() || null,
+        release_year: releaseYear,
+        discovered_via: "manual",
+      }),
+    });
+    $("add-song").value = "";
+    $("add-movie").value = "";
+    $("add-composer").value = "";
+    $("add-year").value = "";
+    toggleAddPanel(false);
+    $("status").textContent = `Added “${songName}”.`;
+    await refreshStats();
+    if (browsing) await loadBrowse();
+  } catch (err) {
+    $("status").textContent = err.message || String(err);
+  } finally {
+    $("add-submit").disabled = false;
+  }
+}
+
+$("toggle-add").addEventListener("click", () => {
+  const panel = $("add-panel");
+  toggleAddPanel(panel.hidden);
+});
+$("add-cancel").addEventListener("click", () => toggleAddPanel(false));
+$("add-submit").addEventListener("click", submitManualAdd);
