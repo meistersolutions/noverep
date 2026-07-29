@@ -6,8 +6,8 @@
  * 2. Run: npm run cap:sync
  * 3. Install on phone and confirm Profile shows the new version near the top
  */
-export const APP_VERSION = '1.6.6';
-export const APP_BUILD = 17;
+export const APP_VERSION = '1.6.7';
+export const APP_BUILD = 18;
 
 export function formatAppVersion(): string {
   return `v${APP_VERSION} (${APP_BUILD})`;
