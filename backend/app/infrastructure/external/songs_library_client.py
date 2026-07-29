@@ -58,8 +58,13 @@ class LibrarySong:
         return " ".join(p for p in parts if p)
 
 
+# Render free-tier cold starts often return 502/503 on the first hit.
+_RETRYABLE_STATUS = {502, 503, 504}
+_MAX_RETRIES = 3
+
+
 class SongsLibraryClient:
-    def __init__(self, base_url: str | None = None, timeout: float = 45.0):
+    def __init__(self, base_url: str | None = None, timeout: float = 60.0):
         self.base_url = (base_url or settings.songs_library_url or "").rstrip("/")
         self.timeout = timeout
 
@@ -71,12 +76,51 @@ class SongsLibraryClient:
         if not self.enabled:
             return False
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(f"{self.base_url}/api/health")
                 return resp.status_code == 200
         except Exception as exc:  # noqa: BLE001
             logger.warning("songs_library_health_failed", error=str(exc))
             return False
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict | None = None,
+        timeout: float | None = None,
+        accept_404: bool = False,
+    ) -> httpx.Response | None:
+        """HTTP call with retries for Render cold-start 502/503."""
+        url = f"{self.base_url}{path}"
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
+                    if attempt == 0:
+                        # Wake the free-tier instance before the real call.
+                        try:
+                            await client.get(f"{self.base_url}/api/health")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    resp = await client.request(method, url, json=json)
+                if accept_404 and resp.status_code == 404:
+                    return resp
+                if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                resp.raise_for_status()
+                return resp
+            except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        return None
 
     async def sample(
         self,
@@ -105,10 +149,10 @@ class SongsLibraryClient:
             "limit": limit,
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(f"{self.base_url}/api/sample", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._request("POST", "/api/sample", json=payload)
+            if not resp:
+                return []
+            data = resp.json()
             return [LibrarySong.from_dict(row) for row in data]
         except Exception as exc:  # noqa: BLE001
             logger.warning("songs_library_sample_failed", error=str(exc), seed=seed or composer)
@@ -121,10 +165,10 @@ class SongsLibraryClient:
         if limit_per_seed is not None:
             payload["limit_per_seed"] = limit_per_seed
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(f"{self.base_url}/api/discover", json=payload)
-                resp.raise_for_status()
-                return resp.json()
+            resp = await self._request("POST", "/api/discover", json=payload, timeout=120.0)
+            if not resp:
+                return {"results": [], "total_inserted": 0, "total_skipped": 0}
+            return resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("songs_library_discover_failed", error=str(exc), seeds=seeds)
             return {"results": [], "total_inserted": 0, "total_skipped": 0, "error": str(exc)}
@@ -134,13 +178,15 @@ class SongsLibraryClient:
         if not self.enabled or not song_id:
             return None
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(f"{self.base_url}/api/songs/{song_id}/resolve-youtube")
-                if resp.status_code == 404:
-                    return None
-                resp.raise_for_status()
-                data = resp.json()
-            return LibrarySong.from_dict(data)
+            resp = await self._request(
+                "POST",
+                f"/api/songs/{song_id}/resolve-youtube",
+                timeout=60.0,
+                accept_404=True,
+            )
+            if not resp or resp.status_code == 404:
+                return None
+            return LibrarySong.from_dict(resp.json())
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "songs_library_resolve_youtube_failed",
