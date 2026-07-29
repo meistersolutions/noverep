@@ -66,7 +66,14 @@ class AuthService:
         return user
 
     async def login(self, session: AsyncSession, username: str, password: str) -> UserModel:
-        result = await session.execute(select(UserModel).where(UserModel.username == username))
+        identifier = username.strip()
+        if not identifier or not password:
+            raise ValueError("Invalid credentials")
+        result = await session.execute(
+            select(UserModel).where(
+                (UserModel.username == identifier) | (UserModel.email == identifier)
+            )
+        )
         user = result.scalar_one_or_none()
         if not user or not user.hashed_password or not verify_password(password, user.hashed_password):
             raise ValueError("Invalid credentials")

@@ -111,6 +111,29 @@ export class ApiError extends Error {
   }
 }
 
+/** Auth endpoints must not send a stale Bearer token or run session-expiry handling. */
+const UNAUTHENTICATED_PATHS = new Set([
+  '/auth/login',
+  '/auth/register',
+  '/auth/guest',
+  '/auth/refresh',
+]);
+
+function isUnauthenticatedPath(path: string): boolean {
+  return UNAUTHENTICATED_PATHS.has(path);
+}
+
+function loginFailureMessage(detail: unknown): string {
+  const msg = formatApiError(detail);
+  if (!msg || msg === 'Request failed' || msg === 'Unauthorized') {
+    return 'Invalid email or password';
+  }
+  if (/invalid credentials/i.test(msg)) {
+    return 'Invalid email or password';
+  }
+  return msg;
+}
+
 let handlingUnauthorized = false;
 
 async function handleUnauthorized() {
@@ -153,7 +176,8 @@ async function request<T>(
   timeoutMs = 120_000,
   isRetry = false,
 ): Promise<T> {
-  const token = getAccessTokenSync();
+  const skipAuth = isUnauthenticatedPath(path);
+  const token = skipAuth ? null : getAccessTokenSync();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -172,6 +196,13 @@ async function request<T>(
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       if (res.status === 401) {
+        if (skipAuth) {
+          const message =
+            path === '/auth/login' || path === '/auth/register'
+              ? loginFailureMessage(err.detail)
+              : formatApiError(err.detail) || res.statusText;
+          throw new ApiError(message, 401);
+        }
         if (!isRetry) {
           const refreshed = await tryRefreshAccessToken();
           if (refreshed) {

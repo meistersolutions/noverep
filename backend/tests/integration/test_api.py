@@ -98,3 +98,53 @@ async def test_refresh_token_flow(client):
         json={"refresh_token": tokens["refresh_token"]},
     )
     assert stale.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_login_invalid_credentials_capacitor_origin(client):
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "nobody", "password": "wrong"},
+        headers={"Origin": "https://localhost"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+    assert response.headers.get("access-control-allow-origin") == "https://localhost"
+
+
+@pytest.mark.asyncio
+async def test_login_ignores_stale_bearer_token(client):
+    guest = await client.post("/api/v1/auth/guest")
+    stale_token = guest.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"username": "nobody", "password": "wrong"},
+        headers={
+            "Origin": "https://localhost",
+            "Authorization": f"Bearer {stale_token}",
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid credentials"
+
+
+@pytest.mark.asyncio
+async def test_register_and_login_by_email(client):
+    username = "emailuser1"
+    email = "emailuser1@example.com"
+    password = "secret12"
+
+    registered = await client.post(
+        "/api/v1/auth/register",
+        json={"username": username, "email": email, "password": password},
+    )
+    assert registered.status_code == 200
+
+    by_email = await client.post(
+        "/api/v1/auth/login",
+        json={"username": email, "password": password},
+        headers={"Origin": "https://localhost"},
+    )
+    assert by_email.status_code == 200
+    assert by_email.json()["username"] == username

@@ -257,7 +257,12 @@ interface PlayerState {
   activePlaylistId: string | null;
 
   init: () => Promise<void>;
-  setAuth: (token: string, refreshToken: string, username: string, isGuest: boolean) => void;
+  setAuth: (
+    token: string,
+    refreshToken: string,
+    username: string,
+    isGuest: boolean,
+  ) => Promise<void>;
   logout: (options?: { skipServerRevoke?: boolean }) => void;
   setPlaying: (playing: boolean) => void;
   setVolume: (v: number) => void;
@@ -317,8 +322,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   activePlaylistId:
     cachedQueueSnapshot?.activePlaylistId ?? cachedPreferences?.active_playlist_id ?? null,
 
-  setAuth: (token, refreshToken, username, isGuest) => {
-    void setStoredAuth({
+  setAuth: async (token, refreshToken, username, isGuest) => {
+    await setStoredAuth({
       accessToken: token,
       refreshToken,
       username,

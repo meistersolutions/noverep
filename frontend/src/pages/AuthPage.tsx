@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Disc3, LogIn, UserPlus, User } from 'lucide-react';
 import { api } from '@/lib/api';
+import { rehydrateAuthStorage } from '@/lib/authStorage';
 import { usePlayerStore } from '@/stores/playerStore';
 import toast from 'react-hot-toast';
 
@@ -11,7 +12,17 @@ export default function AuthPage() {
   const navigate = useNavigate();
   const setAuth = usePlayerStore((s) => s.setAuth);
   const init = usePlayerStore((s) => s.init);
+  const logout = usePlayerStore((s) => s.logout);
   const [tab, setTab] = useState<Tab>('login');
+
+  useEffect(() => {
+    void (async () => {
+      const snapshot = await rehydrateAuthStorage();
+      if (!snapshot?.accessToken && usePlayerStore.getState().token) {
+        logout({ skipServerRevoke: true });
+      }
+    })();
+  }, [logout]);
   const [loading, setLoading] = useState(false);
 
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
@@ -31,7 +42,7 @@ export default function AuthPage() {
     },
     displayName?: string,
   ) => {
-    setAuth(res.access_token, res.refresh_token, res.username, res.is_guest);
+    await setAuth(res.access_token, res.refresh_token, res.username, res.is_guest);
     if (displayName) localStorage.setItem('noverep_display_name', displayName);
     navigate('/', { replace: true });
     void init();
@@ -41,7 +52,9 @@ export default function AuthPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await api.login(loginForm.username, loginForm.password);
+      const username = loginForm.username.trim();
+      const password = loginForm.password;
+      const res = await api.login(username, password);
       await finishAuth(res);
       toast.success('Welcome back!');
     } catch (err) {
@@ -122,7 +135,8 @@ export default function AuthPage() {
             <form onSubmit={handleLogin} className="space-y-4">
               <input
                 required
-                placeholder="Username"
+                placeholder="Username or email"
+                autoComplete="username"
                 value={loginForm.username}
                 onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
                 className="w-full glass px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent/50"
@@ -131,6 +145,7 @@ export default function AuthPage() {
                 required
                 type="password"
                 placeholder="Password"
+                autoComplete="current-password"
                 value={loginForm.password}
                 onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
                 className="w-full glass px-4 py-3 focus:outline-none focus:ring-2 focus:ring-accent/50"

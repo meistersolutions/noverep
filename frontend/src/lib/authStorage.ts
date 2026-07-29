@@ -105,9 +105,23 @@ export function hasStoredAuthSync(): boolean {
   return !!getAccessTokenSync();
 }
 
+/** Re-read persisted auth (e.g. after cache clear or before login). */
+export async function rehydrateAuthStorage(): Promise<AuthSnapshot | null> {
+  if (isNativeApp) {
+    const nativeSnapshot = await readNativeSnapshot();
+    if (nativeSnapshot) {
+      mirrorToLocalStorage(nativeSnapshot);
+      hydrated = true;
+      return applySnapshot(nativeSnapshot);
+    }
+  }
+  hydrated = true;
+  return applySnapshot(readLocalSnapshot());
+}
+
 export async function hydrateAuthStorage(): Promise<AuthSnapshot | null> {
   if (hydrated) {
-    return applySnapshot(readLocalSnapshot());
+    return rehydrateAuthStorage();
   }
 
   if (isNativeApp) {

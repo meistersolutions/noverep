@@ -16,13 +16,18 @@ export function AuthBootstrap({ children }: { children: React.ReactNode }) {
       if (cancelled) return;
 
       if (snapshot?.accessToken) {
-        setAuth(
+        await setAuth(
           snapshot.accessToken,
           snapshot.refreshToken || '',
           snapshot.username,
           snapshot.isGuest,
         );
         scheduleAccessTokenRefresh(snapshot.accessToken);
+      } else {
+        const { token, logout } = usePlayerStore.getState();
+        if (token) {
+          logout({ skipServerRevoke: true });
+        }
       }
 
       setReady(true);
