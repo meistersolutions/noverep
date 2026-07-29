@@ -52,4 +52,13 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 
 ## NoRepeat
 
-Set `SONGS_LIBRARY_URL=http://127.0.0.1:8100` on the NoRepeat backend. Queue refresh samples this library first when configured.
+Set on the NoRepeat backend (Render env):
+
+```
+SONGS_LIBRARY_URL=https://songs-library.onrender.com
+SONGS_LIBRARY_ENABLED=true
+```
+
+## Deploy to the internet (Render + Neon)
+
+Same pattern as NoRepeat — see [docs/DEPLOY_SONGS_LIBRARY.md](../docs/DEPLOY_SONGS_LIBRARY.md).

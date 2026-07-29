@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,9 +14,6 @@ WEB_DIR = next(
     (p for p in (_here.parents[1] / "web", _here.parents[2] / "web") if p.exists()),
     _here.parents[1] / "web",
 )
-
-# Allow Render/local PORT override without code changes
-PORT = int(os.environ.get("PORT", settings.port))
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 app.add_middleware(

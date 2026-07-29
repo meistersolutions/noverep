@@ -31,3 +31,7 @@ SONGS_LIBRARY_ENABLED=true
 When enabled, `QueueService` samples the library for active seeds **before** live YouTube search / home fallback. Unmapped catalog songs are resolved via a targeted YouTube search on title + movie + composer.
 
 See [songs-library/INTEGRATION.md](../songs-library/INTEGRATION.md).
+
+## Deploy library online
+
+Same stack as NoRepeat (Neon Postgres + Render Docker): [DEPLOY_SONGS_LIBRARY.md](DEPLOY_SONGS_LIBRARY.md).
