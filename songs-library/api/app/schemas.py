@@ -70,6 +70,7 @@ class DiscoverSeedResult(BaseModel):
     found: int = 0
     inserted: int = 0
     skipped: int = 0
+    updated: int = 0
     error: str | None = None
 
 
@@ -77,6 +78,34 @@ class DiscoverResponse(BaseModel):
     results: list[DiscoverSeedResult]
     total_inserted: int
     total_skipped: int
+    total_updated: int = 0
+    job_ids: list[str] = Field(default_factory=list)
+
+
+class DiscoverJobOut(BaseModel):
+    id: str
+    seed: str
+    status: str
+    phase: str
+    entity_id: str | None = None
+    entity_label: str | None = None
+    found: int
+    inserted: int
+    skipped: int
+    updated: int
+    pages_done: int
+    message: str | None = None
+    error: str | None = None
+    cursor_json: dict | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class EnrichStatusOut(BaseModel):
+    missing_singers: int
+    missing_lyricists: int
+    missing_either: int
+    last_batch: dict | None = None
 
 
 class SampleRequest(BaseModel):

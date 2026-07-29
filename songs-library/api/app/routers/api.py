@@ -3,10 +3,12 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Song
+from app.models import DiscoverJob, Song
 from app.schemas import (
+    DiscoverJobOut,
     DiscoverRequest,
     DiscoverResponse,
+    EnrichStatusOut,
     ResolveYoutubeRequest,
     ResolveYoutubeResult,
     SampleRequest,
@@ -50,7 +52,7 @@ def list_songs(
     mood: str | None = None,
     year_from: int | None = None,
     year_to: int | None = None,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
@@ -104,8 +106,8 @@ def get_song(song_id: str, db: Session = Depends(get_db)):
 
 @router.post("/songs", response_model=SongOut)
 def create_song(body: SongCreate, db: Session = Depends(get_db)):
-    song, inserted = upsert_song(db, body)
-    if not inserted:
+    song, action = upsert_song(db, body)
+    if action != "inserted":
         raise HTTPException(409, "Song already exists")
     db.commit()
     db.refresh(song)
@@ -133,12 +135,98 @@ def update_song(song_id: str, body: SongUpdate, db: Session = Depends(get_db)):
 
 @router.post("/discover", response_model=DiscoverResponse)
 async def discover(body: DiscoverRequest, db: Session = Depends(get_db)):
-    results = await discover_many(db, body.seeds, limit_per_seed=body.limit_per_seed)
+    """Queue continuous discovery jobs (Wikipedia pages → films → MusicBrainz).
+
+    Pass limit_per_seed=0 (default) for full ingest. A positive limit runs a
+    one-shot capped discover for debugging.
+    """
+    limit = body.limit_per_seed
+    if limit is not None and limit > 0:
+        results = await discover_many(db, body.seeds, limit_per_seed=limit)
+        return DiscoverResponse(
+            results=results,
+            total_inserted=sum(r.inserted for r in results),
+            total_skipped=sum(r.skipped for r in results),
+            total_updated=sum(r.updated for r in results),
+            job_ids=[],
+        )
+
+    job_ids: list[str] = []
+    for seed in body.seeds:
+        cleaned = seed.strip()
+        if not cleaned:
+            continue
+        # Reuse an already-running job for the same seed.
+        active = (
+            db.query(DiscoverJob)
+            .filter(
+                DiscoverJob.seed == cleaned,
+                DiscoverJob.status.in_(("pending", "running")),
+            )
+            .order_by(DiscoverJob.created_at.desc())
+            .first()
+        )
+        if active:
+            job_ids.append(active.id)
+            continue
+        job = DiscoverJob(seed=cleaned, status="pending", phase="queued", message="Queued")
+        db.add(job)
+        db.flush()
+        job_ids.append(job.id)
+    db.commit()
     return DiscoverResponse(
-        results=results,
-        total_inserted=sum(r.inserted for r in results),
-        total_skipped=sum(r.skipped for r in results),
+        results=[],
+        total_inserted=0,
+        total_skipped=0,
+        total_updated=0,
+        job_ids=job_ids,
     )
+
+
+@router.get("/discover/jobs/{job_id}", response_model=DiscoverJobOut)
+def discover_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
+    if not job:
+        raise HTTPException(404, "Discover job not found")
+    return job
+
+
+@router.get("/discover/jobs", response_model=list[DiscoverJobOut])
+def list_discover_jobs(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(DiscoverJob)
+        .order_by(DiscoverJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+@router.get("/enrich/status", response_model=EnrichStatusOut)
+def enrich_status(db: Session = Depends(get_db)):
+    songs = db.query(Song).all()
+    missing_singers = sum(1 for s in songs if not (s.singers or []))
+    missing_lyricists = sum(1 for s in songs if not (s.lyricists or []))
+    missing_either = sum(
+        1 for s in songs if not (s.singers or []) or not (s.lyricists or [])
+    )
+    return EnrichStatusOut(
+        missing_singers=missing_singers,
+        missing_lyricists=missing_lyricists,
+        missing_either=missing_either,
+    )
+
+
+@router.post("/enrich/run")
+async def enrich_run(
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    from app.services.enrich import enrich_batch
+
+    return await enrich_batch(db, limit=limit)
 
 
 @router.post("/sample", response_model=list[SongOut])

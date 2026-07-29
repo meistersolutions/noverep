@@ -12,7 +12,14 @@ class Settings(BaseSettings):
     user_agent: str = "SongsLibrary/0.1 (NoRepeat companion)"
     wikidata_sparql_url: str = "https://query.wikidata.org/sparql"
     wikidata_api_url: str = "https://www.wikidata.org/w/api.php"
-    discover_limit_per_seed: int = 250
+    # 0 = unlimited Wikipedia list ingest for sync discover.
+    discover_limit_per_seed: int = 0
+    discover_wikidata_limit: int = 500
+    discover_musicbrainz_limit: int = 2000
+    discover_films_per_tick: int = 25
+    enrich_batch_size: int = 15
+    enrich_idle_seconds: float = 20.0
+    enrich_pause_seconds: float = 2.0
     youtube_resolve_limit: int = 20
     cors_origins: str = "*"
     port: int = 8100

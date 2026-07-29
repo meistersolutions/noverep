@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.db import init_db
 from app.routers.api import router as api_router
+from app.services.worker import start_background_workers, stop_background_workers
 
 _here = Path(__file__).resolve()
 WEB_DIR = next(
@@ -34,8 +35,14 @@ def root_health():
 
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     init_db()
+    start_background_workers()
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    stop_background_workers()
 
 
 if WEB_DIR.exists():
