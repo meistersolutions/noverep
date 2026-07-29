@@ -19,7 +19,7 @@ from app.schemas import (
 )
 from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
-from app.services.youtube_resolve import resolve_unmapped
+from app.services.youtube_resolve import resolve_unmapped, resolve_one_song
 
 router = APIRouter(prefix="/api")
 
@@ -102,6 +102,17 @@ def get_song(song_id: str, db: Session = Depends(get_db)):
     if not song:
         raise HTTPException(404, "Song not found")
     return song
+
+
+@router.post("/songs/{song_id}/resolve-youtube", response_model=SongOut)
+async def resolve_song_youtube(song_id: str, db: Session = Depends(get_db)):
+    song = db.query(Song).filter(Song.id == song_id).one_or_none()
+    if not song:
+        raise HTTPException(404, "Song not found")
+    resolved = await resolve_one_song(db, song)
+    if not resolved or not resolved.youtube_video_id:
+        raise HTTPException(404, "Could not resolve YouTube video for this song")
+    return resolved
 
 
 @router.post("/songs", response_model=SongOut)

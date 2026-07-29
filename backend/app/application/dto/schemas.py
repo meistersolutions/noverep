@@ -169,6 +169,7 @@ class UserPreferencesResponse(BaseModel):
     gapless_enabled: bool
     discovery_year_from: int | None = None
     discovery_year_to: int | None = None
+    discovery_youtube_enabled: bool = True
     playback_mode: str = "discovery"
     active_playlist_id: UUID | None = None
 
@@ -233,6 +234,7 @@ class UpdatePreferencesRequest(BaseModel):
     gapless_enabled: bool | None = None
     discovery_year_from: int | None = Field(default=None, ge=1950, le=2100)
     discovery_year_to: int | None = Field(default=None, ge=1950, le=2100)
+    discovery_youtube_enabled: bool | None = None
 
 
 class PlaylistResponse(BaseModel):

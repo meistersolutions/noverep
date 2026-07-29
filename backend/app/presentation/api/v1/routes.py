@@ -990,6 +990,7 @@ async def get_preferences(
         gapless_enabled=prefs.gapless_enabled,
         discovery_year_from=getattr(prefs, "discovery_year_from", None),
         discovery_year_to=getattr(prefs, "discovery_year_to", None),
+        discovery_youtube_enabled=getattr(prefs, "discovery_youtube_enabled", True),
         playback_mode=getattr(prefs, "playback_mode", None) or "discovery",
         active_playlist_id=getattr(prefs, "active_playlist_id", None),
     )

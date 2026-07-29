@@ -47,21 +47,29 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
     # Additive migrations for existing Neon/Postgres deploys.
-    alters = [
-        "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS phase VARCHAR(64) DEFAULT 'queued'",
-        "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS updated INTEGER DEFAULT 0",
-        "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS pages_done INTEGER DEFAULT 0",
-        "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS cursor_json JSON",
-        "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS message TEXT",
-    ]
     if DATABASE_URL.startswith("sqlite"):
-        # SQLite lacks IF NOT EXISTS for columns in older versions — ignore failures.
         alters = [
             "ALTER TABLE discover_jobs ADD COLUMN phase VARCHAR(64) DEFAULT 'queued'",
             "ALTER TABLE discover_jobs ADD COLUMN updated INTEGER DEFAULT 0",
             "ALTER TABLE discover_jobs ADD COLUMN pages_done INTEGER DEFAULT 0",
             "ALTER TABLE discover_jobs ADD COLUMN cursor_json JSON",
             "ALTER TABLE discover_jobs ADD COLUMN message TEXT",
+            "ALTER TABLE songs ADD COLUMN language VARCHAR(64)",
+            "ALTER TABLE songs ADD COLUMN directors JSON",
+            "ALTER TABLE songs ADD COLUMN actors JSON",
+            "ALTER TABLE songs ADD COLUMN actresses JSON",
+        ]
+    else:
+        alters = [
+            "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS phase VARCHAR(64) DEFAULT 'queued'",
+            "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS updated INTEGER DEFAULT 0",
+            "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS pages_done INTEGER DEFAULT 0",
+            "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS cursor_json JSON",
+            "ALTER TABLE discover_jobs ADD COLUMN IF NOT EXISTS message TEXT",
+            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS language VARCHAR(64)",
+            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS directors JSON DEFAULT '[]'",
+            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS actors JSON DEFAULT '[]'",
+            "ALTER TABLE songs ADD COLUMN IF NOT EXISTS actresses JSON DEFAULT '[]'",
         ]
     with engine.begin() as conn:
         for stmt in alters:

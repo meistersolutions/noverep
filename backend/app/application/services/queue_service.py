@@ -114,6 +114,11 @@ class QueueService:
     def _user_languages(self, pref: UserPreferencesModel | None) -> list[str]:
         return resolve_languages_from_prefs(pref)
 
+    def _youtube_discovery_enabled(self, pref: UserPreferencesModel | None) -> bool:
+        if pref is None:
+            return True
+        return bool(getattr(pref, "discovery_youtube_enabled", True))
+
     def _search_seed_queries(self, seed: str, langs: list[str]) -> list[str]:
         q = seed.strip()
         if not q:
@@ -302,6 +307,7 @@ class QueueService:
         lib_song,
         recent: dict,
         filters: QueueRefreshFilters | None = None,
+        pref: UserPreferencesModel | None = None,
     ) -> ProviderTrack | None:
         """Map a catalog song to a playable ProviderTrack (YouTube id or search)."""
         if lib_song.youtube_video_id:
@@ -321,6 +327,29 @@ class QueueService:
                 release_year=lib_song.release_year,
                 popularity=float(lib_song.popularity or 0) / 100.0,
             )
+
+        youtube_discovery = self._youtube_discovery_enabled(pref)
+        if not youtube_discovery and self.songs_library and self.songs_library.enabled:
+            resolved = await self.songs_library.resolve_youtube_for_song(lib_song.id)
+            if resolved and resolved.youtube_video_id:
+                lib_song = resolved
+                artist = (
+                    (lib_song.singers[0] if lib_song.singers else None)
+                    or lib_song.composer_name
+                    or "Unknown Artist"
+                )
+                return ProviderTrack(
+                    provider="youtube",
+                    provider_track_id=lib_song.youtube_video_id,
+                    title=lib_song.song_name,
+                    artist=artist,
+                    album=lib_song.movie_name,
+                    duration_seconds=None,
+                    thumbnail_url=f"https://i.ytimg.com/vi/{lib_song.youtube_video_id}/hqdefault.jpg",
+                    release_year=lib_song.release_year,
+                    popularity=float(lib_song.popularity or 0) / 100.0,
+                )
+            return None
 
         candidates = await self._recommend(
             session,
@@ -387,7 +416,7 @@ class QueueService:
                 if len(queue) >= target_size:
                     break
                 track = await self._library_song_to_track(
-                    session, user_id, lib_song, recent, filters=filters
+                    session, user_id, lib_song, recent, filters=filters, pref=pref
                 )
                 if not track:
                     continue
@@ -792,53 +821,54 @@ class QueueService:
             recent=recent,
         )
 
-        queries = self._build_discovery_queries(pref, current=current)
+        if self._youtube_discovery_enabled(pref):
+            queries = self._build_discovery_queries(pref, current=current)
 
-        query_idx = 0
-        attempts = 0
-        seed_count = len(self._active_seeds(pref))
-        max_attempts = min(target_size * 2 + seed_count * 2, 24)
+            query_idx = 0
+            attempts = 0
+            seed_count = len(self._active_seeds(pref))
+            max_attempts = min(target_size * 2 + seed_count * 2, 24)
 
-        while len(queue) < target_size and attempts < max_attempts:
-            attempts += 1
-            query = queries[query_idx % len(queries)]
-            query_idx += 1
+            while len(queue) < target_size and attempts < max_attempts:
+                attempts += 1
+                query = queries[query_idx % len(queries)]
+                query_idx += 1
 
-            candidates = await self._recommend(
-                session,
-                user_id,
-                query,
-                limit=15,
-                recent=recent,
-                extra_artists=[current.artist],
-            )
+                candidates = await self._recommend(
+                    session,
+                    user_id,
+                    query,
+                    limit=15,
+                    recent=recent,
+                    extra_artists=[current.artist],
+                )
 
-            existing = await self._queue_track_ids(queue)
-            existing_songs = await self._queue_song_ids(queue)
-            blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
-            added_any = False
-            for candidate in candidates:
-                if len(queue) >= target_size:
+                existing = await self._queue_track_ids(queue)
+                existing_songs = await self._queue_song_ids(queue)
+                blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+                added_any = False
+                for candidate in candidates:
+                    if len(queue) >= target_size:
+                        break
+                    if self._skip_recommendation_candidate(
+                        candidate, existing, existing_songs, blocked_songs
+                    ):
+                        continue
+                    try:
+                        item = await self._append_track(
+                            session, user_id, candidate.track, len(queue), is_current=False
+                        )
+                        queue.append(item)
+                        existing.add(item.provider_track_id)
+                        existing_songs.add(item.song_id)
+                        added_any = True
+                    except ValueError:
+                        continue
+                if not added_any and query_idx >= len(queries) * 2:
                     break
-                if self._skip_recommendation_candidate(
-                    candidate, existing, existing_songs, blocked_songs
-                ):
-                    continue
-                try:
-                    item = await self._append_track(
-                        session, user_id, candidate.track, len(queue), is_current=False
-                    )
-                    queue.append(item)
-                    existing.add(item.provider_track_id)
-                    existing_songs.add(item.song_id)
-                    added_any = True
-                except ValueError:
-                    continue
-            if not added_any and query_idx >= len(queries) * 2:
-                break
 
-        if len(queue) < target_size:
-            queue = await self._append_home_discovery(session, user_id, queue, target_size)
+            if len(queue) < target_size:
+                queue = await self._append_home_discovery(session, user_id, queue, target_size)
 
         await session.flush()
         queue = await self._dedupe_queue(session, queue)
@@ -909,52 +939,53 @@ class QueueService:
             filters=filters,
         )
 
-        query_idx = 0
-        attempts = 0
-        max_attempts = min(target_size * 2 + len(seeds) * 2, 24)
-        seed_artists = recent["artists"] + ([current.artist] if current else [])
+        if self._youtube_discovery_enabled(pref):
+            query_idx = 0
+            attempts = 0
+            max_attempts = min(target_size * 2 + len(seeds) * 2, 24)
+            seed_artists = recent["artists"] + ([current.artist] if current else [])
 
-        while len(queue) < target_size and attempts < max_attempts:
-            attempts += 1
-            query = queries[query_idx % len(queries)]
-            query_idx += 1
+            while len(queue) < target_size and attempts < max_attempts:
+                attempts += 1
+                query = queries[query_idx % len(queries)]
+                query_idx += 1
 
-            candidates = await self._recommend(
-                session, user_id, query, limit=15, recent=recent, extra_artists=seed_artists,
-                filters=filters,
-            )
+                candidates = await self._recommend(
+                    session, user_id, query, limit=15, recent=recent, extra_artists=seed_artists,
+                    filters=filters,
+                )
 
-            existing = await self._queue_track_ids(queue)
-            existing_songs = await self._queue_song_ids(queue)
-            blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
-            added_any = False
-            for candidate in candidates:
-                if len(queue) >= target_size:
+                existing = await self._queue_track_ids(queue)
+                existing_songs = await self._queue_song_ids(queue)
+                blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+                added_any = False
+                for candidate in candidates:
+                    if len(queue) >= target_size:
+                        break
+                    if self._skip_recommendation_candidate(
+                        candidate, existing, existing_songs, blocked_songs
+                    ):
+                        continue
+                    try:
+                        is_first = len(queue) == 0
+                        item = await self._append_track(
+                            session,
+                            user_id,
+                            candidate.track,
+                            len(queue),
+                            is_current=is_first,
+                        )
+                        queue.append(item)
+                        existing.add(item.provider_track_id)
+                        existing_songs.add(item.song_id)
+                        added_any = True
+                    except ValueError:
+                        continue
+                if not added_any and query_idx >= len(queries) * 2:
                     break
-                if self._skip_recommendation_candidate(
-                    candidate, existing, existing_songs, blocked_songs
-                ):
-                    continue
-                try:
-                    is_first = len(queue) == 0
-                    item = await self._append_track(
-                        session,
-                        user_id,
-                        candidate.track,
-                        len(queue),
-                        is_current=is_first,
-                    )
-                    queue.append(item)
-                    existing.add(item.provider_track_id)
-                    existing_songs.add(item.song_id)
-                    added_any = True
-                except ValueError:
-                    continue
-            if not added_any and query_idx >= len(queries) * 2:
-                break
 
-        if len(queue) < target_size:
-            queue = await self._append_home_discovery(session, user_id, queue, target_size)
+            if len(queue) < target_size:
+                queue = await self._append_home_discovery(session, user_id, queue, target_size)
 
         if queue and not any(q.is_current for q in queue):
             queue[0].is_current = True
@@ -987,50 +1018,51 @@ class QueueService:
             pref=pref,
             recent=recent,
         )
-        queries = self._build_discovery_queries(pref)
-        query_idx = 0
-        attempts = 0
-        seed_count = len(self._active_seeds(pref))
-        max_attempts = min(target_size * 2 + seed_count * 2, 24)
+        if self._youtube_discovery_enabled(pref):
+            queries = self._build_discovery_queries(pref)
+            query_idx = 0
+            attempts = 0
+            seed_count = len(self._active_seeds(pref))
+            max_attempts = min(target_size * 2 + seed_count * 2, 24)
 
-        while len(queue) < target_size and attempts < max_attempts:
-            attempts += 1
-            query = queries[query_idx % len(queries)]
-            query_idx += 1
-            candidates = await self._recommend(
-                session, user_id, query, limit=15, recent=recent
-            )
-            existing = await self._queue_track_ids(queue)
-            existing_songs = await self._queue_song_ids(queue)
-            blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
-            added_any = False
-            for candidate in candidates:
-                if len(queue) >= target_size:
+            while len(queue) < target_size and attempts < max_attempts:
+                attempts += 1
+                query = queries[query_idx % len(queries)]
+                query_idx += 1
+                candidates = await self._recommend(
+                    session, user_id, query, limit=15, recent=recent
+                )
+                existing = await self._queue_track_ids(queue)
+                existing_songs = await self._queue_song_ids(queue)
+                blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+                added_any = False
+                for candidate in candidates:
+                    if len(queue) >= target_size:
+                        break
+                    if self._skip_recommendation_candidate(
+                        candidate, existing, existing_songs, blocked_songs
+                    ):
+                        continue
+                    try:
+                        is_first = len(queue) == 0
+                        item = await self._append_track(
+                            session,
+                            user_id,
+                            candidate.track,
+                            len(queue),
+                            is_current=is_first,
+                        )
+                        queue.append(item)
+                        existing.add(item.provider_track_id)
+                        existing_songs.add(item.song_id)
+                        added_any = True
+                    except ValueError:
+                        continue
+                if not added_any and query_idx >= len(queries) * 2:
                     break
-                if self._skip_recommendation_candidate(
-                    candidate, existing, existing_songs, blocked_songs
-                ):
-                    continue
-                try:
-                    is_first = len(queue) == 0
-                    item = await self._append_track(
-                        session,
-                        user_id,
-                        candidate.track,
-                        len(queue),
-                        is_current=is_first,
-                    )
-                    queue.append(item)
-                    existing.add(item.provider_track_id)
-                    existing_songs.add(item.song_id)
-                    added_any = True
-                except ValueError:
-                    continue
-            if not added_any and query_idx >= len(queries) * 2:
-                break
 
-        if len(queue) < target_size:
-            queue = await self._append_home_discovery(session, user_id, queue, target_size)
+            if len(queue) < target_size:
+                queue = await self._append_home_discovery(session, user_id, queue, target_size)
 
         queue = await self._dedupe_queue(session, queue)
         return queue

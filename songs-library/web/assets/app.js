@@ -20,6 +20,22 @@ const COLUMNS = [
     skipTextFilter: true,
   },
   { key: "composer_name", label: "Composer", get: (s) => s.composer_name || "" },
+  { key: "language", label: "Language", get: (s) => s.language || "" },
+  {
+    key: "directors",
+    label: "Director",
+    get: (s) => (s.directors || []).join(", "),
+  },
+  {
+    key: "actors",
+    label: "Actors",
+    get: (s) => (s.actors || []).join(", "),
+  },
+  {
+    key: "actresses",
+    label: "Actresses",
+    get: (s) => (s.actresses || []).join(", "),
+  },
   {
     key: "singers",
     label: "Singers",
