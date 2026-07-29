@@ -28,6 +28,7 @@ docker compose up --build
 - **Intelligent Queue** – Next track auto-discovered when queue is exhausted
 - **YouTube Playback** – Search & play via yt-dlp + YouTube IFrame API
 - **Native mobile app (Capacitor)** – Android/iOS shell for background playback when screen is off — see [docs/CAPACITOR.md](docs/CAPACITOR.md)
+- **Songs Library (optional)** – Catalog-backed discovery via standalone `songs-library` service — see [docs/SONGS_LIBRARY.md](docs/SONGS_LIBRARY.md)
 - **JWT Auth** – Guest mode, registration, Google OAuth (optional)
 - **Statistics Dashboard** – Discovery score, streaks, heatmaps, top artists/genres
 

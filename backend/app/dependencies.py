@@ -21,6 +21,7 @@ from app.infrastructure.database.session import get_db_session
 from app.infrastructure.providers.spotify.provider import SpotifyProvider
 from app.infrastructure.providers.youtube.provider import YouTubeProvider
 from app.infrastructure.external.musicbrainz_client import MusicBrainzClient
+from app.infrastructure.external.songs_library_client import SongsLibraryClient
 
 security = HTTPBearer(auto_error=False)
 
@@ -32,7 +33,14 @@ _normalizer = SongNormalizer()
 _memory = MemoryService()
 _recommendation = RecommendationEngine(_providers, _memory, _normalizer)
 _home = HomeRecommendationService(_recommendation)
-_queue = QueueService(_recommendation, _memory, _normalizer, home_recommendations=_home)
+_songs_library = SongsLibraryClient()
+_queue = QueueService(
+    _recommendation,
+    _memory,
+    _normalizer,
+    home_recommendations=_home,
+    songs_library=_songs_library,
+)
 _playlist = PlaylistService(_normalizer)
 _auth = AuthService()
 _stats = StatisticsService()
