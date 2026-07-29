@@ -1,7 +1,8 @@
-"""Wikidata search + SPARQL for composer discographies (songs only)."""
+"""Wikidata search + SPARQL for composer discographies."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -24,7 +25,7 @@ KNOWN_COMPOSERS: dict[str, dict[str, str]] = {
 
 def _headers() -> dict[str, str]:
     return {
-        "User-Agent": "SongsLibrary/0.1 (https://github.com/meistersolutions; NoRepeat companion)",
+        "User-Agent": settings.user_agent,
         "Accept": "application/json",
     }
 
@@ -66,12 +67,14 @@ async def resolve_entity(seed: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-COMPOSER_WORKS_SPARQL = """
+# Tamil/Indian film composers rarely have P31=song (Q7366). Prefer musical works /
+# anything composed by them that is not a film/TV series.
+COMPOSER_MUSICAL_WORKS_SPARQL = """
 SELECT DISTINCT ?work ?workLabel ?year ?filmLabel ?performerLabel ?lyricistLabel WHERE {{
   ?work wdt:P86 wd:{qid} .
-  ?work wdt:P31/wdt:P279* wd:Q7366 .
   FILTER NOT EXISTS {{ ?work wdt:P31/wdt:P279* wd:Q11424 }}
   FILTER NOT EXISTS {{ ?work wdt:P31/wdt:P279* wd:Q24856 }}
+  FILTER NOT EXISTS {{ ?work wdt:P31/wdt:P279* wd:Q15416 }}
   OPTIONAL {{ ?work wdt:P577 ?date . BIND(YEAR(?date) AS ?year) }}
   OPTIONAL {{
     ?work wdt:P361 ?film .
@@ -84,14 +87,15 @@ SELECT DISTINCT ?work ?workLabel ?year ?filmLabel ?performerLabel ?lyricistLabel
 LIMIT {limit}
 """
 
-COMPOSER_FILM_SONGS_SPARQL = """
+COMPOSER_MUSICAL_CLASS_SPARQL = """
 SELECT DISTINCT ?work ?workLabel ?year ?filmLabel ?performerLabel ?lyricistLabel WHERE {{
-  ?film wdt:P86 wd:{qid} .
-  ?film wdt:P31/wdt:P279* wd:Q11424 .
-  ?work wdt:P361 ?film .
-  ?work wdt:P31/wdt:P279* wd:Q7366 .
+  ?work wdt:P86 wd:{qid} .
+  ?work wdt:P31/wdt:P279* wd:Q2188189 .
   OPTIONAL {{ ?work wdt:P577 ?date . BIND(YEAR(?date) AS ?year) }}
-  OPTIONAL {{ ?film wdt:P577 ?fdate . BIND(YEAR(?fdate) AS ?year) }}
+  OPTIONAL {{
+    ?work wdt:P361 ?film .
+    ?film wdt:P31/wdt:P279* wd:Q11424 .
+  }}
   OPTIONAL {{ ?work wdt:P175 ?performer . }}
   OPTIONAL {{ ?work wdt:P676 ?lyricist . }}
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,ta,hi,ml,te". }}
@@ -118,15 +122,27 @@ def _qid_from_uri(uri: str | None) -> str | None:
     return None
 
 
-async def _run_sparql(query: str) -> list[dict[str, Any]]:
+async def _run_sparql(query: str, *, attempts: int = 4) -> list[dict[str, Any]]:
+    last_exc: Exception | None = None
     async with httpx.AsyncClient(timeout=120.0, headers=_headers()) as client:
-        resp = await client.get(
-            settings.wikidata_sparql_url,
-            params={"format": "json", "query": query},
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    return payload.get("results", {}).get("bindings", [])
+        for attempt in range(attempts):
+            try:
+                resp = await client.get(
+                    settings.wikidata_sparql_url,
+                    params={"format": "json", "query": query},
+                )
+                if resp.status_code == 429:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                resp.raise_for_status()
+                payload = resp.json()
+                return payload.get("results", {}).get("bindings", [])
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                await asyncio.sleep(1.0 * (attempt + 1))
+    if last_exc:
+        raise last_exc
+    return []
 
 
 def _rows_to_works(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -145,6 +161,7 @@ def _rows_to_works(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "release_year": None,
                 "singers": [],
                 "lyricists": [],
+                "source": "wikidata_sparql",
             },
         )
         film = _literal(row, "filmLabel")
@@ -166,10 +183,28 @@ def _rows_to_works(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 async def fetch_composer_works(qid: str, limit: int) -> list[dict[str, Any]]:
-    half = max(limit // 2, 50)
-    direct = await _run_sparql(COMPOSER_WORKS_SPARQL.format(qid=qid, limit=half))
-    via_film = await _run_sparql(COMPOSER_FILM_SONGS_SPARQL.format(qid=qid, limit=limit))
-    merged = {w["wikidata_id"]: w for w in _rows_to_works(direct)}
-    for w in _rows_to_works(via_film):
-        merged[w["wikidata_id"]] = w
+    """Return musical works composed by qid (excludes films themselves)."""
+    half = max(limit, 50)
+    musical = await _run_sparql(
+        COMPOSER_MUSICAL_CLASS_SPARQL.format(qid=qid, limit=half)
+    )
+    loose = await _run_sparql(
+        COMPOSER_MUSICAL_WORKS_SPARQL.format(qid=qid, limit=half)
+    )
+    merged = {w["wikidata_id"]: w for w in _rows_to_works(musical)}
+    for w in _rows_to_works(loose):
+        existing = merged.get(w["wikidata_id"])
+        if not existing:
+            merged[w["wikidata_id"]] = w
+            continue
+        if not existing.get("movie_name") and w.get("movie_name"):
+            existing["movie_name"] = w["movie_name"]
+        if not existing.get("release_year") and w.get("release_year"):
+            existing["release_year"] = w["release_year"]
+        for singer in w.get("singers") or []:
+            if singer not in existing["singers"]:
+                existing["singers"].append(singer)
+        for lyricist in w.get("lyricists") or []:
+            if lyricist not in existing["lyricists"]:
+                existing["lyricists"].append(lyricist)
     return list(merged.values())[:limit]

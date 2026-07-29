@@ -1,5 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
+let browsing = false;
+
 async function api(path, options) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -7,7 +9,10 @@ async function api(path, options) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || res.statusText);
+    const detail = err.detail;
+    throw new Error(
+      typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : res.statusText,
+    );
   }
   return res.json();
 }
@@ -20,20 +25,23 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function renderStats(stats) {
-  const composers = Object.entries(stats.by_composer || {})
-    .slice(0, 5)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(" · ");
-  $("stats").innerHTML = `<strong>${stats.total_songs}</strong>songs in library<div>${composers || "Empty — run discover when ready"}</div>`;
+function renderBrowseCount(total) {
+  $("browse-count").textContent = String(total ?? 0);
 }
 
 function renderSongs(songs) {
-  if (!songs.length) {
-    $("list").innerHTML = `<p class="meta">No songs yet. Add manually via API or click Discover later.</p>`;
+  const list = $("list");
+  if (!browsing) {
+    list.hidden = true;
+    list.innerHTML = "";
     return;
   }
-  $("list").innerHTML = songs
+  list.hidden = false;
+  if (!songs.length) {
+    list.innerHTML = `<p class="meta">No songs in the library yet. Enter a seed and click Discover.</p>`;
+    return;
+  }
+  list.innerHTML = songs
     .map(
       (s) => `
     <article class="card">
@@ -48,6 +56,7 @@ function renderSongs(songs) {
       <div class="tags">
         <span class="tag">pop ${Math.round(s.popularity)}</span>
         <span class="tag">${escapeHtml(s.playability)}</span>
+        <span class="tag">${escapeHtml(s.discovered_via || "manual")}</span>
         ${(s.moods || []).map((m) => `<span class="tag">${escapeHtml(m)}</span>`).join("")}
       </div>
     </article>`,
@@ -55,34 +64,52 @@ function renderSongs(songs) {
     .join("");
 }
 
-async function load() {
-  $("status").textContent = "Loading…";
-  const params = new URLSearchParams();
-  if ($("q").value.trim()) params.set("q", $("q").value.trim());
-  if ($("composer").value) params.set("composer", $("composer").value);
-  params.set("limit", "80");
+async function refreshStats() {
+  const stats = await api("/api/stats");
+  renderBrowseCount(stats.total_songs);
+  return stats;
+}
+
+async function loadBrowse() {
+  $("status").textContent = "Loading library…";
+  const params = new URLSearchParams({ limit: "100" });
+  const seed = $("seed").value.trim();
+  if (seed) params.set("composer", seed);
   const [stats, songs] = await Promise.all([
     api("/api/stats"),
     api(`/api/songs?${params}`),
   ]);
-  renderStats(stats);
+  renderBrowseCount(stats.total_songs);
   renderSongs(songs);
-  $("status").textContent = `${songs.length} shown`;
+  $("status").textContent = browsing ? `${songs.length} shown` : "";
 }
 
 async function discover() {
+  const seed = $("seed").value.trim();
+  if (!seed) {
+    $("status").textContent = "Enter a seed first (composer, film, or artist).";
+    $("seed").focus();
+    return;
+  }
   $("discover").disabled = true;
-  $("status").textContent = "Discovering from Wikidata (may take a minute)…";
+  $("status").textContent = `Discovering songs for “${seed}” via Wikipedia / Wikidata…`;
   try {
     const result = await api("/api/discover", {
       method: "POST",
       body: JSON.stringify({
-        seeds: ["Ilaiyaraaja", "A. R. Rahman", "Yuvan Shankar Raja"],
-        limit_per_seed: 300,
+        seeds: [seed],
+        limit_per_seed: 200,
       }),
     });
-    $("status").textContent = `Inserted ${result.total_inserted}, skipped ${result.total_skipped}`;
-    await load();
+    const row = result.results?.[0];
+    const err = row?.error ? ` — ${row.error}` : "";
+    $("status").textContent =
+      `Found ${row?.found ?? 0}, inserted ${result.total_inserted}, skipped ${result.total_skipped}` +
+      (row?.entity_label ? ` (${row.entity_label})` : "") +
+      err;
+    browsing = true;
+    $("browse").classList.add("active");
+    await loadBrowse();
   } catch (err) {
     $("status").textContent = err.message || String(err);
   } finally {
@@ -90,9 +117,22 @@ async function discover() {
   }
 }
 
-$("refresh").addEventListener("click", () => load().catch((e) => ($("status").textContent = e.message)));
 $("discover").addEventListener("click", discover);
-$("q").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") load().catch((e) => ($("status").textContent = e.message));
+$("seed").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    discover();
+  }
 });
-load().catch((e) => ($("status").textContent = e.message));
+$("browse").addEventListener("click", async () => {
+  browsing = !browsing;
+  $("browse").classList.toggle("active", browsing);
+  if (browsing) {
+    await loadBrowse().catch((e) => ($("status").textContent = e.message));
+  } else {
+    $("list").hidden = true;
+    $("status").textContent = "";
+  }
+});
+
+refreshStats().catch((e) => ($("status").textContent = e.message));
