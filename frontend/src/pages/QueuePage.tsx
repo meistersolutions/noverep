@@ -57,7 +57,7 @@ export default function QueuePage() {
 
   return (
     <div className="space-y-6 max-w-3xl pb-4">
-      <MobileHeader title="Queue" />
+      <MobileHeader title="Queue" showYoutubeDiscoveryToggle />
       <h2 className="hidden md:block text-2xl font-bold">Queue</h2>
 
       {queueBuilding && (
