@@ -1,0 +1,14 @@
+---
+description: Always commit and push completed work to main without asking
+alwaysApply: true
+---
+
+# Always push to main
+
+When feature work for this repo is complete (or the user asks to ship changes):
+
+- Commit the relevant changes
+- Push to `main` / `origin` without asking for confirmation
+- Do not wait for an extra "yes, push" — push is pre-approved
+
+Still follow normal git safety: no force-push to main/master, no skipping hooks, no amending pushed commits unless explicitly requested, and do not commit secrets.

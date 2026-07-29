@@ -1,43 +1,42 @@
 # Build latest NoRepeat APK and install on connected Android device (USB or wireless adb).
-# Fixes JAVA_HOME automatically before Gradle runs.
-#
-# Usage (PowerShell):
-#   cd frontend
-#   npm run cap:deploy:android:win
-#
-# Wireless debugging:
-#   adb pair <ip>:<pairing-port> <code>
-#   adb connect <ip>:<connect-port>
-#   npm run cap:deploy:android:win
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+$adbDir = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools'
+if ((Test-Path $adbDir) -and ($env:Path -notlike '*platform-tools*')) {
+    $env:Path = "$adbDir;$env:Path"
+}
+
 . (Join-Path $PSScriptRoot 'ensure-java-home.ps1')
 
-Write-Host "`n→ Checking adb devices…" -ForegroundColor Cyan
-$devices = adb devices | Select-String 'device$'
-if (-not $devices) {
-    Write-Host @"
-
-No Android device found.
-Wireless debugging:
-  1. Phone: Developer options → Wireless debugging → Pair device with pairing code
-  2. adb pair <ip>:<pairing-port> <6-digit-code>
-  3. adb connect <ip>:<connect-port>
-  4. adb devices
-  5. npm run cap:deploy:android:win
-"@ -ForegroundColor Yellow
+Write-Host ''
+Write-Host 'Checking adb devices...' -ForegroundColor Cyan
+$deviceLines = adb devices | Select-Object -Skip 1 | Where-Object { $_ -match '\tdevice(\s|$)' }
+if (-not $deviceLines) {
+    Write-Host 'No device in adb list; trying mdns wireless connect...' -ForegroundColor Yellow
+    $mdns = adb mdns services 2>$null | Select-String '_adb-tls-connect._tcp'
+    if ($mdns) {
+        $hostPort = ($mdns.ToString() -split '\s+')[-1]
+        adb connect $hostPort | Out-Host
+        Start-Sleep -Seconds 2
+        $deviceLines = adb devices | Select-Object -Skip 1 | Where-Object { $_ -match '\tdevice(\s|$)' }
+    }
+}
+if (-not $deviceLines) {
+    Write-Host 'No Android device found. Pair/connect wireless debugging first.' -ForegroundColor Yellow
     exit 1
 }
-Write-Host "Device(s): $($devices -join ', ')" -ForegroundColor Green
+Write-Host ('Device(s): ' + ($deviceLines -join ' | ')) -ForegroundColor Green
 
-Write-Host "`n→ Syncing Capacitor web bundle…" -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Syncing Capacitor web bundle...' -ForegroundColor Cyan
 npm run cap:sync
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "`n→ Building debug APK…" -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Building debug APK...' -ForegroundColor Cyan
 $gradleJavaHome = $env:JAVA_HOME.Replace('\', '/')
 Set-Location (Join-Path $root 'android')
 .\gradlew.bat assembleDebug --no-daemon "-Dorg.gradle.java.home=$gradleJavaHome"
@@ -48,8 +47,18 @@ if (-not (Test-Path $apk)) {
     Write-Error "APK not found at $apk"
 }
 
-Write-Host "`n→ Installing $apk …" -ForegroundColor Cyan
-adb install -r $apk
+Write-Host ''
+Write-Host ('Installing ' + $apk + ' ...') -ForegroundColor Cyan
+$serial = (($deviceLines | Select-Object -First 1).ToString() -split '\s+')[0]
+$adbTarget = if ($serial) { @('-s', $serial) } else { @() }
+adb @adbTarget install -r $apk
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'Install failed; retrying after uninstall (signature mismatch)...' -ForegroundColor Yellow
+    adb @adbTarget uninstall com.noverep.app | Out-Host
+    adb @adbTarget install $apk
+}
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "`n✓ Installed NoRepeat (com.noverep.app) v$((Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version)" -ForegroundColor Green
+$appVersion = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+Write-Host ''
+Write-Host ('Installed NoRepeat (com.noverep.app) v' + $appVersion) -ForegroundColor Green

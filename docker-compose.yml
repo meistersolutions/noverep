@@ -33,16 +33,30 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-noverep}:${POSTGRES_PASSWORD:-noverep_secret}@db:5432/${POSTGRES_DB:-noverep}
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,capacitor://localhost,https://localhost,http://localhost}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      SONGS_LIBRARY_URL: http://songs-library:8100
+      SONGS_LIBRARY_ENABLED: ${SONGS_LIBRARY_ENABLED:-true}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      songs-library:
+        condition: service_started
+    restart: unless-stopped
+
+  songs-library:
+    build: ./songs-library
+    ports:
+      - "8100:8100"
+    volumes:
+      - songs_library_data:/app/data
+    environment:
+      DATABASE_URL: sqlite:////app/data/library.db
     restart: unless-stopped
 
   frontend:
@@ -60,3 +74,4 @@ services:
 
 volumes:
   postgres_data:
+  songs_library_data:
