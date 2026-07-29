@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,17 +10,31 @@ from app.config import settings
 from app.db import init_db
 from app.routers.api import router as api_router
 
-WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+_here = Path(__file__).resolve()
+WEB_DIR = next(
+    (p for p in (_here.parents[1] / "web", _here.parents[2] / "web") if p.exists()),
+    _here.parents[1] / "web",
+)
+
+# Allow Render/local PORT override without code changes
+PORT = int(os.environ.get("PORT", settings.port))
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.cors_origins == "*" else settings.cors_origins.split(","),
+    allow_origins=["*"] if settings.cors_origins == "*" else [
+        o.strip() for o in settings.cors_origins.split(",") if o.strip()
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.include_router(api_router)
+
+
+@app.get("/health")
+def root_health():
+    return {"status": "ok", "service": "songs-library"}
 
 
 @app.on_event("startup")

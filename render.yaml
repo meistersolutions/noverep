@@ -3,7 +3,9 @@
 #
 # Prerequisites:
 #   1. Code pushed to GitHub (e.g. meistersolutions/noverep)
-#   2. Neon Postgres database created (free) — paste DATABASE_URL in Render dashboard
+#   2. Neon Postgres database(s) created (free) — paste DATABASE_URL in Render dashboard
+#      - One DB for NoRepeat API
+#      - One DB (or separate Neon branch/database) for Songs Library
 #
 # Deploy: Render Dashboard → New → Blueprint → connect this repo
 
@@ -25,6 +27,10 @@ services:
         value: https://noverep.onrender.com
       - key: REDIS_URL
         value: redis://localhost:6379/0
+      - key: SONGS_LIBRARY_URL
+        value: https://songs-library.onrender.com
+      - key: SONGS_LIBRARY_ENABLED
+        value: "true"
 
   - type: web
     name: noverep
@@ -39,3 +45,17 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+
+  - type: web
+    name: songs-library
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./songs-library/Dockerfile
+    dockerContext: ./songs-library
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://noverep.onrender.com,https://songs-library.onrender.com,*
