@@ -1,8 +1,13 @@
 const $ = (id) => document.getElementById(id);
 
+const DISCOVERY_YEAR_MIN = 1950;
+const DISCOVERY_YEAR_MAX = 2100;
+
 let browsing = false;
 /** @type {Array<Record<string, any>>} */
 let allSongs = [];
+/** @type {{ from: number | null, to: number | null }} */
+let yearRange = { from: null, to: null };
 
 const COLUMNS = [
   { key: "song_name", label: "Song", get: (s) => s.song_name || "" },
@@ -11,6 +16,8 @@ const COLUMNS = [
     key: "release_year",
     label: "Year",
     get: (s) => (s.release_year == null ? "" : String(s.release_year)),
+    // Year uses the player-style from/to range instead of a free-text column filter.
+    skipTextFilter: true,
   },
   { key: "composer_name", label: "Composer", get: (s) => s.composer_name || "" },
   {
@@ -63,32 +70,120 @@ function renderBrowseCount(total) {
   $("browse-count").textContent = String(total ?? 0);
 }
 
+function validateYearField(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return { value: null, error: null };
+  if (!/^\d{4}$/.test(trimmed)) {
+    return { value: null, error: "Enter a 4-digit year (e.g. 2015)" };
+  }
+  const year = Number(trimmed);
+  if (year < DISCOVERY_YEAR_MIN || year > DISCOVERY_YEAR_MAX) {
+    return {
+      value: null,
+      error: `Year must be ${DISCOVERY_YEAR_MIN}–${DISCOVERY_YEAR_MAX}`,
+    };
+  }
+  return { value: year, error: null };
+}
+
+function validateYearRange(from, to) {
+  if (from !== null && to !== null && from > to) {
+    return '"From" year must be on or before "To" year';
+  }
+  return null;
+}
+
+function setYearError(message) {
+  const el = $("year-error");
+  if (!message) {
+    el.hidden = true;
+    el.textContent = "";
+    $("year-from").classList.remove("invalid");
+    $("year-to").classList.remove("invalid");
+    return;
+  }
+  el.hidden = false;
+  el.textContent = message;
+}
+
+function commitYearRange({ reload = true } = {}) {
+  const fromResult = validateYearField($("year-from").value);
+  const toResult = validateYearField($("year-to").value);
+
+  $("year-from").classList.toggle("invalid", !!fromResult.error);
+  $("year-to").classList.toggle("invalid", !!toResult.error);
+
+  if (fromResult.error || toResult.error) {
+    setYearError(fromResult.error || toResult.error);
+    return false;
+  }
+
+  const rangeErr = validateYearRange(fromResult.value, toResult.value);
+  if (rangeErr) {
+    setYearError(rangeErr);
+    $("year-from").classList.add("invalid");
+    $("year-to").classList.add("invalid");
+    return false;
+  }
+
+  setYearError(null);
+  const unchanged =
+    yearRange.from === fromResult.value && yearRange.to === toResult.value;
+  yearRange = { from: fromResult.value, to: toResult.value };
+
+  if (browsing && !unchanged && reload) {
+    loadBrowse().catch((e) => ($("status").textContent = e.message));
+  } else if (browsing) {
+    renderFilteredRows();
+  }
+  return true;
+}
+
 function getColumnFilters() {
   const filters = {};
   for (const col of COLUMNS) {
+    if (col.skipTextFilter) continue;
     const input = document.querySelector(`[data-filter="${col.key}"]`);
     filters[col.key] = (input?.value || "").trim().toLowerCase();
   }
   return filters;
 }
 
+function matchesYearRange(song) {
+  const y = song.release_year;
+  // Match player recommendation behavior: keep unknown years.
+  if (y == null) return true;
+  if (yearRange.from != null && y < yearRange.from) return false;
+  if (yearRange.to != null && y > yearRange.to) return false;
+  return true;
+}
+
 function filterSongs(songs) {
   const filters = getColumnFilters();
-  return songs.filter((song) =>
-    COLUMNS.every((col) => {
+  return songs.filter((song) => {
+    if (!matchesYearRange(song)) return false;
+    return COLUMNS.every((col) => {
+      if (col.skipTextFilter) return true;
       const needle = filters[col.key];
       if (!needle) return true;
       return col.get(song).toLowerCase().includes(needle);
-    }),
-  );
+    });
+  });
 }
 
 function ensureTableShell() {
   const list = $("list");
   if (list.querySelector(".songs-table")) return;
 
-  const headFilters = COLUMNS.map(
-    (col) => `
+  const headFilters = COLUMNS.map((col) => {
+    if (col.key === "release_year") {
+      return `
+        <th scope="col">
+          <div class="th-label">${escapeHtml(col.label)}</div>
+          <div class="year-col-hint">Uses From / To above</div>
+        </th>`;
+    }
+    return `
       <th scope="col">
         <div class="th-label">${escapeHtml(col.label)}</div>
         <input
@@ -99,8 +194,8 @@ function ensureTableShell() {
           aria-label="Filter ${escapeHtml(col.label)}"
           autocomplete="off"
         />
-      </th>`,
-  ).join("");
+      </th>`;
+  }).join("");
 
   list.innerHTML = `
     <div class="table-wrap">
@@ -118,7 +213,6 @@ function ensureTableShell() {
       renderFilteredRows();
     });
     input.addEventListener("keydown", (e) => {
-      // Don't trigger Discover while filtering the table.
       if (e.key === "Enter") e.preventDefault();
     });
   });
@@ -152,9 +246,16 @@ function renderFilteredRows() {
       .join("");
   }
 
-  const activeFilters = Object.values(getColumnFilters()).filter(Boolean).length;
+  const textFilters = Object.values(getColumnFilters()).filter(Boolean).length;
+  const yearActive = yearRange.from != null || yearRange.to != null;
+  const activeFilters = textFilters + (yearActive ? 1 : 0);
+  const yearLabel = yearActive
+    ? ` · years ${yearRange.from ?? "…"}–${yearRange.to ?? "…"}`
+    : "";
+
   $("status").textContent = browsing
     ? `${filtered.length} shown` +
+      yearLabel +
       (activeFilters ? ` · ${activeFilters} filter${activeFilters === 1 ? "" : "s"} active` : "") +
       (allSongs.length !== filtered.length ? ` of ${allSongs.length}` : "")
     : "";
@@ -190,6 +291,10 @@ async function refreshStats() {
 async function loadBrowse() {
   $("status").textContent = "Loading library…";
   const params = new URLSearchParams({ limit: "200" });
+  // Same API year filters the player uses when sampling the library.
+  if (yearRange.from != null) params.set("year_from", String(yearRange.from));
+  if (yearRange.to != null) params.set("year_to", String(yearRange.to));
+
   const [stats, songs] = await Promise.all([
     api("/api/stats"),
     api(`/api/songs?${params}`),
@@ -203,6 +308,10 @@ async function discover() {
   if (!seed) {
     $("status").textContent = "Enter a seed first (composer, film, or artist).";
     $("seed").focus();
+    return;
+  }
+  if (!commitYearRange({ reload: false })) {
+    $("status").textContent = "Fix the year range before discovering.";
     return;
   }
   $("discover").disabled = true;
@@ -231,6 +340,24 @@ async function discover() {
   }
 }
 
+function bindYearRange() {
+  const apply = () => commitYearRange({ reload: true });
+  $("year-from").addEventListener("blur", apply);
+  $("year-to").addEventListener("blur", apply);
+  for (const id of ["year-from", "year-to"]) {
+    $(id).addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        apply();
+      }
+    });
+    $(id).addEventListener("input", () => {
+      setYearError(null);
+      $(id).classList.remove("invalid");
+    });
+  }
+}
+
 $("discover").addEventListener("click", discover);
 $("seed").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
@@ -242,6 +369,7 @@ $("browse").addEventListener("click", async () => {
   browsing = !browsing;
   $("browse").classList.toggle("active", browsing);
   if (browsing) {
+    if (!commitYearRange({ reload: false })) return;
     await loadBrowse().catch((e) => ($("status").textContent = e.message));
   } else {
     $("list").hidden = true;
@@ -251,4 +379,5 @@ $("browse").addEventListener("click", async () => {
   }
 });
 
+bindYearRange();
 refreshStats().catch((e) => ($("status").textContent = e.message));

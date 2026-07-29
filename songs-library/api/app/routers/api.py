@@ -68,10 +68,22 @@ def list_songs(
         query = query.filter(Song.composer_name.ilike(f"%{composer}%"))
     if movie:
         query = query.filter(Song.movie_name.ilike(f"%{movie}%"))
-    if year_from is not None:
-        query = query.filter(Song.release_year >= year_from)
-    if year_to is not None:
-        query = query.filter(Song.release_year <= year_to)
+    # Keep unknown years (same behavior as NoRepeat discovery year filter).
+    if year_from is not None and year_to is not None:
+        query = query.filter(
+            or_(
+                Song.release_year.is_(None),
+                Song.release_year.between(year_from, year_to),
+            )
+        )
+    elif year_from is not None:
+        query = query.filter(
+            or_(Song.release_year.is_(None), Song.release_year >= year_from)
+        )
+    elif year_to is not None:
+        query = query.filter(
+            or_(Song.release_year.is_(None), Song.release_year <= year_to)
+        )
     if mood:
         query = query.filter(Song.moods.contains([mood]))
     return (
@@ -135,10 +147,21 @@ def sample(body: SampleRequest, db: Session = Depends(get_db)):
     composer = body.composer or body.seed
     if composer:
         query = query.filter(Song.composer_name.ilike(f"%{composer}%"))
-    if body.year_from is not None:
-        query = query.filter(Song.release_year >= body.year_from)
-    if body.year_to is not None:
-        query = query.filter(Song.release_year <= body.year_to)
+    if body.year_from is not None and body.year_to is not None:
+        query = query.filter(
+            or_(
+                Song.release_year.is_(None),
+                Song.release_year.between(body.year_from, body.year_to),
+            )
+        )
+    elif body.year_from is not None:
+        query = query.filter(
+            or_(Song.release_year.is_(None), Song.release_year >= body.year_from)
+        )
+    elif body.year_to is not None:
+        query = query.filter(
+            or_(Song.release_year.is_(None), Song.release_year <= body.year_to)
+        )
     if body.only_mapped:
         query = query.filter(Song.playability == "mapped")
     if body.exclude_hashes:

@@ -32,6 +32,33 @@
     <button id="discover" type="button" class="accent">Discover</button>
   </section>
 
+  <section id="year-range" class="year-range">
+    <div class="year-range-fields">
+      <label>
+        <span>From year</span>
+        <input
+          id="year-from"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder="e.g. 1980"
+        />
+      </label>
+      <label>
+        <span>To year</span>
+        <input
+          id="year-to"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder="e.g. 1990"
+        />
+      </label>
+    </div>
+    <p id="year-error" class="year-error" hidden></p>
+    <p class="year-hint">Same as the player discovery year range. Leave blank for any year (1950–2100).</p>
+  </section>
+
   <p id="status" class="status"></p>
   <div id="list" class="list" hidden></div>
   <script src="/assets/app.js"></script>

@@ -60,7 +60,7 @@ h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 700; }
 }
 .browse-sub { font-size: 0.85rem; }
 
-.controls { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.85rem; }
 input, button {
   border-radius: 10px;
   border: 1px solid var(--line);
@@ -81,6 +81,50 @@ button.accent {
 button:disabled { opacity: 0.5; cursor: wait; }
 .status { color: var(--muted); min-height: 1.25rem; }
 .meta { color: var(--muted); font-size: 0.85rem; }
+
+.year-range {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(26, 34, 30, 0.7);
+  max-width: 36rem;
+}
+.year-range-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.year-range label {
+  display: grid;
+  gap: 0.35rem;
+}
+.year-range label span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.year-range input {
+  width: 100%;
+  flex: none;
+}
+.year-range input.invalid {
+  border-color: rgba(255, 100, 100, 0.65);
+}
+.year-hint {
+  margin: 0.55rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.year-error {
+  margin: 0.45rem 0 0;
+  font-size: 0.8rem;
+  color: #ff8f8f;
+}
+.year-col-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  padding: 0.35rem 0;
+}
 
 .list { margin-top: 0.5rem; }
 
