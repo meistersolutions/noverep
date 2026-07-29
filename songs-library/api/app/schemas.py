@@ -10,6 +10,10 @@ class SongCreate(BaseModel):
     composer_name: str | None = None
     singers: list[str] = Field(default_factory=list)
     lyricists: list[str] = Field(default_factory=list)
+    language: str | None = None
+    directors: list[str] = Field(default_factory=list)
+    actors: list[str] = Field(default_factory=list)
+    actresses: list[str] = Field(default_factory=list)
     popularity: float = Field(default=50.0, ge=0, le=100)
     moods: list[str] = Field(default_factory=list)
     wikidata_id: str | None = None
@@ -28,6 +32,10 @@ class SongUpdate(BaseModel):
     composer_name: str | None = None
     singers: list[str] | None = None
     lyricists: list[str] | None = None
+    language: str | None = None
+    directors: list[str] | None = None
+    actors: list[str] | None = None
+    actresses: list[str] | None = None
     popularity: float | None = Field(default=None, ge=0, le=100)
     moods: list[str] | None = None
     youtube_video_id: str | None = None
@@ -43,6 +51,10 @@ class SongOut(BaseModel):
     composer_name: str | None
     singers: list[str]
     lyricists: list[str]
+    language: str | None = None
+    directors: list[str] = Field(default_factory=list)
+    actors: list[str] = Field(default_factory=list)
+    actresses: list[str] = Field(default_factory=list)
     popularity: float
     moods: list[str]
     content_hash: str

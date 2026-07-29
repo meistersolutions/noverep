@@ -169,6 +169,8 @@ def _header_index(headers: list[str]) -> dict[str, int]:
             mapping.setdefault("singer", i)
         elif "lyric" in key:
             mapping.setdefault("lyricist", i)
+        elif key == "language":
+            mapping.setdefault("language", i)
     return mapping
 
 
@@ -192,6 +194,7 @@ def _tables_to_works(
         year_i = idx.get("year")
         singer_i = idx.get("singer")
         lyric_i = idx.get("lyricist")
+        language_i = idx.get("language")
 
         for row in grid[1:]:
             if song_i >= len(row):
@@ -211,6 +214,9 @@ def _tables_to_works(
             lyricists: list[str] = []
             if lyric_i is not None and lyric_i < len(row) and row[lyric_i].strip():
                 lyricists = [s.strip() for s in re.split(r"[,;/&]| and ", row[lyric_i]) if s.strip()]
+            language = None
+            if language_i is not None and language_i < len(row) and row[language_i].strip():
+                language = row[language_i].strip()
             works.append(
                 {
                     "wikidata_id": None,
@@ -219,6 +225,7 @@ def _tables_to_works(
                     "release_year": year,
                     "singers": singers,
                     "lyricists": lyricists,
+                    "language": language,
                     "wikipedia_title": page_title,
                     "source": "wikipedia",
                 }

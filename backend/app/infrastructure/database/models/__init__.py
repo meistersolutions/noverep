@@ -241,6 +241,7 @@ class UserPreferencesModel(Base):
     gapless_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     discovery_year_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discovery_year_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discovery_youtube_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     playback_mode: Mapped[str] = mapped_column(String(20), default="discovery")
     active_playlist_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("playlists.id"), nullable=True

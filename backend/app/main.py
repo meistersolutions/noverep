@@ -97,6 +97,12 @@ async def lifespan(app: FastAPI):
             )
         )
         await conn.execute(
+            text(
+                "ALTER TABLE user_preferences "
+                "ADD COLUMN IF NOT EXISTS discovery_youtube_enabled BOOLEAN DEFAULT TRUE"
+            )
+        )
+        await conn.execute(
             text("ALTER TABLE songs ADD COLUMN IF NOT EXISTS enrichment_metadata JSONB")
         )
         # Seed providers

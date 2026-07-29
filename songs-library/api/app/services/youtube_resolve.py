@@ -55,6 +55,21 @@ def _search_youtube_sync(query: str) -> str | None:
     return None
 
 
+async def resolve_one_song(db: Session, song: Song) -> Song | None:
+    """Resolve and persist YouTube video id for a single catalog song."""
+    if song.youtube_video_id:
+        return song
+    q = build_search_query(song)
+    video_id = await asyncio.to_thread(_search_youtube_sync, q)
+    if not video_id:
+        return None
+    song.youtube_video_id = video_id
+    song.playability = "mapped"
+    db.commit()
+    db.refresh(song)
+    return song
+
+
 async def resolve_unmapped(
     db: Session,
     *,

@@ -142,27 +142,59 @@ async def _search_entity_credits(
         return credits
 
 
-def songs_needing_enrichment(db: Session, *, limit: int = 25) -> list[Song]:
-    rows = (
-        db.query(Song)
-        .order_by(Song.updated_at.asc(), Song.created_at.asc())
-        .limit(limit * 4)
-        .all()
-    )
-    need: list[Song] = []
-    for song in rows:
-        singers = song.singers or []
-        lyricists = song.lyricists or []
-        if singers and lyricists:
-            continue
-        # Skip if recently marked as enrich-attempted with no data
-        extra = song.extra or {}
-        if extra.get("enrich_attempts", 0) >= 3:
-            continue
-        need.append(song)
-        if len(need) >= limit:
-            break
-    return need
+async def lookup_film_metadata(movie_name: str) -> dict[str, Any]:
+    """Directors and cast from Wikidata for a film title."""
+    label = _sparql_escape(movie_name.strip())
+    if not label:
+        return {"directors": [], "actors": [], "actresses": []}
+
+    query = f"""
+    SELECT DISTINCT ?directorLabel ?castLabel ?genderLabel WHERE {{
+      ?film rdfs:label "{label}"@en .
+      ?film wdt:P31/wdt:P279* wd:Q11424 .
+      OPTIONAL {{ ?film wdt:P57 ?director . }}
+      OPTIONAL {{
+        ?film wdt:P161 ?cast .
+        OPTIONAL {{ ?cast wdt:P21 ?gender . }}
+      }}
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,ta,hi,ml,te". }}
+    }}
+    LIMIT 80
+    """
+    async with httpx.AsyncClient(timeout=60.0, headers=_headers()) as client:
+        for attempt in range(3):
+            resp = await client.get(
+                settings.wikidata_sparql_url,
+                params={"format": "json", "query": query},
+            )
+            if resp.status_code == 429:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            if resp.status_code != 200:
+                break
+            bindings = resp.json().get("results", {}).get("bindings", [])
+            directors: list[str] = []
+            actors: list[str] = []
+            actresses: list[str] = []
+            for row in bindings:
+                d = (row.get("directorLabel") or {}).get("value")
+                if d and not d.startswith("http") and d not in directors:
+                    directors.append(d)
+                cast = (row.get("castLabel") or {}).get("value")
+                gender = (row.get("genderLabel") or {}).get("value") or ""
+                if not cast or cast.startswith("http"):
+                    continue
+                g = gender.casefold()
+                if "female" in g or g.endswith("1072"):
+                    if cast not in actresses:
+                        actresses.append(cast)
+                elif "male" in g or g.endswith("1097"):
+                    if cast not in actors:
+                        actors.append(cast)
+                elif cast not in actors:
+                    actors.append(cast)
+            return {"directors": directors, "actors": actors, "actresses": actresses}
+    return {"directors": [], "actors": [], "actresses": []}
 
 
 async def enrich_song(db: Session, song: Song, *, composer_qid: str | None) -> bool:
@@ -179,7 +211,6 @@ async def enrich_song(db: Session, song: Song, *, composer_qid: str | None) -> b
         song.lyricists = list(credits["lyricists"])
         changed = True
     if credits.get("wikidata_id") and not song.wikidata_id:
-        # Only set if unique
         clash = (
             db.query(Song)
             .filter(Song.wikidata_id == credits["wikidata_id"], Song.id != song.id)
@@ -189,12 +220,52 @@ async def enrich_song(db: Session, song: Song, *, composer_qid: str | None) -> b
             song.wikidata_id = credits["wikidata_id"]
             changed = True
 
+    if song.movie_name and (
+        not (song.directors or [])
+        or not (song.actors or [])
+        or not (song.actresses or [])
+    ):
+        film_meta = await lookup_film_metadata(song.movie_name)
+        if film_meta.get("directors") and not (song.directors or []):
+            song.directors = list(film_meta["directors"])
+            changed = True
+        if film_meta.get("actors") and not (song.actors or []):
+            song.actors = list(film_meta["actors"])
+            changed = True
+        if film_meta.get("actresses") and not (song.actresses or []):
+            song.actresses = list(film_meta["actresses"])
+            changed = True
+
     extra = dict(song.extra or {})
     extra["enrich_attempts"] = int(extra.get("enrich_attempts") or 0) + 1
     if changed:
         extra["enriched_via"] = "wikidata"
     song.extra = extra
     return changed
+
+
+def songs_needing_enrichment(db: Session, *, limit: int = 25) -> list[Song]:
+    rows = (
+        db.query(Song)
+        .order_by(Song.updated_at.asc(), Song.created_at.asc())
+        .limit(limit * 6)
+        .all()
+    )
+    need: list[Song] = []
+    for song in rows:
+        missing_credits = not (song.singers or []) or not (song.lyricists or [])
+        missing_film = song.movie_name and (
+            not (song.directors or []) or not (song.actors or []) or not (song.actresses or [])
+        )
+        if not missing_credits and not missing_film:
+            continue
+        extra = song.extra or {}
+        if extra.get("enrich_attempts", 0) >= 3:
+            continue
+        need.append(song)
+        if len(need) >= limit:
+            break
+    return need
 
 
 async def enrich_batch(db: Session, *, limit: int = 20) -> dict[str, int]:

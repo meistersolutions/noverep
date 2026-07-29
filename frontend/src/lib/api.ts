@@ -67,6 +67,7 @@ export interface UserPreferences {
   gapless_enabled: boolean;
   discovery_year_from: number | null;
   discovery_year_to: number | null;
+  discovery_youtube_enabled: boolean;
   playback_mode: 'discovery' | 'playlist';
   active_playlist_id: string | null;
 }

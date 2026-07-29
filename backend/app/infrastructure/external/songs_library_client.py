@@ -124,3 +124,23 @@ class SongsLibraryClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("songs_library_discover_failed", error=str(exc), seeds=seeds)
             return {"results": [], "total_inserted": 0, "total_skipped": 0, "error": str(exc)}
+
+    async def resolve_youtube_for_song(self, song_id: str) -> LibrarySong | None:
+        """Playback-only YouTube mapping for a catalog song (not discovery)."""
+        if not self.enabled or not song_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(f"{self.base_url}/api/songs/{song_id}/resolve-youtube")
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                data = resp.json()
+            return LibrarySong.from_dict(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "songs_library_resolve_youtube_failed",
+                error=str(exc),
+                song_id=song_id,
+            )
+            return None

@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Filter, Loader2, Plus, RefreshCw, X } from 'luc
 import { LanguageMultiSelect } from '@/components/LanguageMultiSelect';
 import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
 import { effectiveLanguages } from '@/lib/languages';
+import { api } from '@/lib/api';
 import { usePlayerStore } from '@/stores/playerStore';
 import type { QueueRefreshOptions } from '@/lib/api';
 
@@ -49,6 +50,7 @@ export function QueueRefreshPanel({
   const [languages, setLanguages] = useState<string[]>([]);
   const [yearFrom, setYearFrom] = useState<number | null>(null);
   const [yearTo, setYearTo] = useState<number | null>(null);
+  const [youtubeDiscovery, setYoutubeDiscovery] = useState(true);
   const lastHydratedKey = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -56,6 +58,7 @@ export function QueueRefreshPanel({
     setLanguages(effectiveLanguages(preferences.preferred_languages, preferences.language_preference));
     setYearFrom(preferences.discovery_year_from);
     setYearTo(preferences.discovery_year_to);
+    setYoutubeDiscovery(preferences.discovery_youtube_enabled ?? true);
   }, [preferences]);
 
   // Hydrate chips when saved seeds change — do NOT re-fill after the user clears them.
@@ -98,6 +101,17 @@ export function QueueRefreshPanel({
     await onRefresh(pending.length ? pending : null, buildOptions());
   };
 
+  const toggleYoutubeDiscovery = async () => {
+    const next = !youtubeDiscovery;
+    setYoutubeDiscovery(next);
+    try {
+      const updated = await api.updatePreferences({ discovery_youtube_enabled: next });
+      usePlayerStore.setState({ preferences: updated });
+    } catch {
+      setYoutubeDiscovery(!next);
+    }
+  };
+
   if (!preferences) {
     return <div className="glass h-32 animate-pulse rounded-xl" />;
   }
@@ -105,11 +119,31 @@ export function QueueRefreshPanel({
   return (
     <section className="glass overflow-hidden space-y-0">
       <div className="p-4 space-y-3 border-b border-white/10">
-        <label className="text-sm font-medium">Queue seeds (optional)</label>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="text-sm font-medium">Queue seeds (optional)</label>
+          <button
+            type="button"
+            onClick={toggleYoutubeDiscovery}
+            className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+              youtubeDiscovery
+                ? 'border-accent/50 bg-accent/15 text-accent'
+                : 'border-white/15 bg-white/5 text-white/70'
+            }`}
+            title={
+              youtubeDiscovery
+                ? 'YouTube discovery is on — queue mixes library + YouTube search'
+                : 'Library only — songs from Songs Library; YouTube used only to play'
+            }
+          >
+            {youtubeDiscovery ? 'YouTube discovery: ON' : 'YouTube discovery: OFF (library only)'}
+          </button>
+        </div>
         <p className="text-xs text-white/50">
           Add up to {MAX_SEEDS} searches. We rotate across them to mix niches into your queue. Leave
-          empty to refresh from your saved preferences. If the queue runs dry, home discovery songs
-          fill in.
+          empty to refresh from your saved preferences.
+          {youtubeDiscovery
+            ? ' Home discovery can fill gaps when the queue runs dry.'
+            : ' With YouTube discovery off, only the Songs Library catalog is used; YouTube is still used to play tracks.'}
         </p>
 
         {seeds.length > 0 && (

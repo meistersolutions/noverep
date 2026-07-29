@@ -139,7 +139,7 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .songs-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1280px;
   font-size: 0.9rem;
 }
 
