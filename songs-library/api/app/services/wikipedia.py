@@ -150,9 +150,16 @@ class _WikiPageParser(HTMLParser):
 
 def _header_index(headers: list[str]) -> dict[str, int]:
     mapping: dict[str, int] = {}
-    for i, h in enumerate(headers):
-        key = h.casefold().strip()
-        if key in ("song", "song title", "title", "track"):
+    lower = [h.casefold().strip() for h in headers]
+    looks_like_filmography = any(
+        h in ("cast", "director", "language", "status", "dubbed", "notes", "date")
+        for h in lower
+    ) and "song" not in lower and "track" not in lower
+
+    for i, key in enumerate(lower):
+        if key in ("song", "song title", "track"):
+            mapping.setdefault("song", i)
+        elif key == "title" and not looks_like_filmography and "film" not in lower:
             mapping.setdefault("song", i)
         elif key in ("film", "movie", "album", "film / album", "film/album"):
             mapping.setdefault("film", i)
@@ -176,15 +183,9 @@ def _tables_to_works(
             continue
         headers = [c.casefold() for c in grid[0]]
         idx = _header_index(headers)
-        start = 1
+        # Require an explicit song/track column — never invent songs from film lists.
         if "song" not in idx:
-            if len(grid[0]) >= 2 and not any(
-                h in ("film", "song", "year", "album", "title") for h in headers
-            ):
-                idx = {"film": 0, "song": 1}
-                start = 0
-            else:
-                continue
+            continue
 
         song_i = idx["song"]
         film_i = idx.get("film")
@@ -192,7 +193,7 @@ def _tables_to_works(
         singer_i = idx.get("singer")
         lyric_i = idx.get("lyricist")
 
-        for row in grid[start:]:
+        for row in grid[1:]:
             if song_i >= len(row):
                 continue
             song = row[song_i].strip()
@@ -223,6 +224,44 @@ def _tables_to_works(
                 }
             )
     return works
+
+
+def _tables_to_films(
+    tables: list[tuple[int | None, list[list[str]]]],
+) -> list[dict[str, Any]]:
+    """Extract film titles from filmography / film-score tables."""
+    films: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for default_year, grid in tables:
+        if len(grid) < 2:
+            continue
+        headers = [c.casefold().strip() for c in grid[0]]
+        if any(h in ("song", "track") for h in headers):
+            continue
+        film_i = None
+        year_i = None
+        for i, h in enumerate(headers):
+            if h in ("film", "movie", "title") and film_i is None:
+                film_i = i
+            if h in ("year", "date", "release year") and year_i is None:
+                year_i = i
+        if film_i is None:
+            continue
+        for row in grid[1:]:
+            if film_i >= len(row):
+                continue
+            name = row[film_i].strip()
+            if not name or name.casefold() in ("film", "movie", "title"):
+                continue
+            key = name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            year = default_year
+            if year_i is not None and year_i < len(row):
+                year = _year_from_heading(row[year_i]) or year
+            films.append({"film": name, "year": year})
+    return films
 
 
 async def _wiki_get(client: httpx.AsyncClient, params: dict[str, Any]) -> dict[str, Any]:
@@ -274,25 +313,29 @@ async def _resolve_song_list_pages(client: httpx.AsyncClient, label: str) -> lis
         if resolved and resolved not in found:
             found.append(resolved)
 
-    data = await _wiki_get(
-        client,
-        {
-            "action": "opensearch",
-            "search": f"{label} songs",
-            "limit": 8,
-            "format": "json",
-        },
-    )
-    titles = data[1] if isinstance(data, list) and len(data) > 1 else []
-    first = label.casefold().split()[0]
-    for title in titles:
-        t = str(title)
-        low = t.casefold()
-        if first not in low:
-            continue
-        if any(token in low for token in ("song", "discography", "soundtrack")):
-            if t not in found:
-                found.append(t)
+    for query in (f"{label} songs", f"List of film scores by {label}"):
+        data = await _wiki_get(
+            client,
+            {
+                "action": "opensearch",
+                "search": query,
+                "limit": 10,
+                "format": "json",
+            },
+        )
+        titles = data[1] if isinstance(data, list) and len(data) > 1 else []
+        first = label.casefold().split()[0]
+        for title in titles:
+            t = str(title)
+            low = t.casefold()
+            if first not in low:
+                continue
+            if any(
+                token in low
+                for token in ("song", "discography", "soundtrack", "film scores", "film score")
+            ):
+                if t not in found:
+                    found.append(t)
     return found
 
 
@@ -305,13 +348,9 @@ def _extract_main_article_links(html: str) -> list[str]:
     return [unquote(link.replace("_", " ")) for link in links]
 
 
-async def _parse_page_works(
-    client: httpx.AsyncClient,
-    title: str,
-    *,
-    depth: int = 0,
-    limit: int | None = None,
-) -> list[dict[str, Any]]:
+async def _parse_page_html(
+    client: httpx.AsyncClient, title: str
+) -> tuple[str, str, list[tuple[int | None, list[list[str]]]]]:
     data = await _wiki_get(
         client,
         {
@@ -324,17 +363,29 @@ async def _parse_page_works(
         },
     )
     if "error" in data:
-        return []
+        return title, "", []
     parsed = data.get("parse") or {}
     html = (parsed.get("text") or {}).get("*") or ""
     page_title = parsed.get("title") or title
-
     parser = _WikiPageParser()
     parser.feed(html)
-    works = _tables_to_works(parser.tables, page_title=page_title)
+    return page_title, html, parser.tables
+
+
+async def _parse_page_works(
+    client: httpx.AsyncClient,
+    title: str,
+    *,
+    depth: int = 0,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    page_title, html, tables = await _parse_page_html(client, title)
+    if not html and not tables:
+        return []
+    works = _tables_to_works(tables, page_title=page_title)
 
     if not works and depth < 1:
-        for link in _extract_main_article_links(html)[:6]:
+        for link in _extract_main_article_links(html)[:8]:
             works.extend(
                 await _parse_page_works(client, link, depth=depth + 1, limit=limit)
             )
@@ -354,6 +405,81 @@ async def _parse_page_works(
     return works[:limit] if limit else works
 
 
+async def list_composer_films(label: str) -> list[dict[str, Any]]:
+    """Collect film titles from discography / film-score decade pages."""
+    async with httpx.AsyncClient(timeout=90.0, headers=_headers()) as client:
+        pages = await _resolve_song_list_pages(client, label)
+        pages = [
+            p
+            for p in pages
+            if "discography" in p.casefold()
+            or "film score" in p.casefold()
+            or "filmography" in p.casefold()
+        ]
+        seed_pages = list(pages) or [f"{label} discography"]
+
+        films: list[dict[str, Any]] = []
+        seen_pages: set[str] = set()
+        queue = list(seed_pages)
+        while queue:
+            title = queue.pop(0)
+            if title in seen_pages:
+                continue
+            seen_pages.add(title)
+            try:
+                page_title, html, tables = await _parse_page_html(client, title)
+            except Exception:  # noqa: BLE001
+                continue
+            films.extend(_tables_to_films(tables))
+            for link in _extract_main_article_links(html):
+                low = link.casefold()
+                if "film score" in low or "discography" in low or "filmography" in low:
+                    if link not in seen_pages:
+                        queue.append(link)
+            await asyncio.sleep(0.2)
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for f in films:
+        key = (f.get("film") or "").casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
+async def fetch_film_soundtrack_songs(
+    film_name: str, *, year: int | None = None
+) -> list[dict[str, Any]]:
+    """Parse a film Wikipedia page for soundtrack / tracklist tables."""
+    async with httpx.AsyncClient(timeout=60.0, headers=_headers()) as client:
+        title = await _page_exists(client, film_name)
+        if not title:
+            data = await _wiki_get(
+                client,
+                {
+                    "action": "opensearch",
+                    "search": film_name,
+                    "limit": 5,
+                    "format": "json",
+                },
+            )
+            titles = data[1] if isinstance(data, list) and len(data) > 1 else []
+            title = titles[0] if titles else None
+        if not title:
+            return []
+        page_title, _html, tables = await _parse_page_html(client, title)
+        works = _tables_to_works(tables, page_title=page_title)
+        for w in works:
+            if not w.get("movie_name"):
+                w["movie_name"] = film_name
+            if not w.get("release_year") and year:
+                w["release_year"] = year
+            w["source"] = "wikipedia_film"
+        return works
+
+
 def _dedupe_works(works: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str]] = set()
     out: list[dict[str, Any]] = []
@@ -369,9 +495,10 @@ def _dedupe_works(works: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-async def fetch_composer_songs(label: str, limit: int) -> list[dict[str, Any]]:
-    """Discover songs from English Wikipedia list / discography pages."""
-    target = max(limit * 2, limit)
+async def fetch_composer_songs(
+    label: str, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """Discover songs from Wikipedia list pages. limit=None means all rows."""
     async with httpx.AsyncClient(timeout=90.0, headers=_headers()) as client:
         pages = await _resolve_song_list_pages(client, label)
         pages.sort(
@@ -384,11 +511,13 @@ async def fetch_composer_songs(label: str, limit: int) -> list[dict[str, Any]]:
         all_works: list[dict[str, Any]] = []
         for title in pages:
             try:
-                all_works.extend(
-                    await _parse_page_works(client, title, limit=target - len(all_works))
-                )
+                remaining = None if limit is None else max(limit - len(all_works), 0)
+                if remaining == 0:
+                    break
+                all_works.extend(await _parse_page_works(client, title, limit=remaining))
             except Exception:  # noqa: BLE001
                 continue
-            if len(all_works) >= target:
+            if limit is not None and len(all_works) >= limit:
                 break
-    return _dedupe_works(all_works)[:limit]
+    deduped = _dedupe_works(all_works)
+    return deduped if limit is None else deduped[:limit]

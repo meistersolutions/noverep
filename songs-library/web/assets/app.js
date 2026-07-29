@@ -290,17 +290,48 @@ async function refreshStats() {
 
 async function loadBrowse() {
   $("status").textContent = "Loading library…";
-  const params = new URLSearchParams({ limit: "200" });
-  // Same API year filters the player uses when sampling the library.
-  if (yearRange.from != null) params.set("year_from", String(yearRange.from));
-  if (yearRange.to != null) params.set("year_to", String(yearRange.to));
-
-  const [stats, songs] = await Promise.all([
-    api("/api/stats"),
-    api(`/api/songs?${params}`),
-  ]);
+  const stats = await api("/api/stats");
   renderBrowseCount(stats.total_songs);
+
+  const songs = [];
+  const pageSize = 200;
+  let offset = 0;
+  while (true) {
+    const params = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String(offset),
+    });
+    if (yearRange.from != null) params.set("year_from", String(yearRange.from));
+    if (yearRange.to != null) params.set("year_to", String(yearRange.to));
+    const batch = await api(`/api/songs?${params}`);
+    songs.push(...batch);
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+    if (offset > 20000) break;
+  }
   renderSongs(songs);
+}
+
+async function pollDiscoverJob(jobId) {
+  for (let i = 0; i < 3600; i++) {
+    const job = await api(`/api/discover/jobs/${jobId}`);
+    const filmProgress = job.cursor_json?.film_index
+      ? ` · film ${job.cursor_json.film_index}/${job.cursor_json.films_total || "?"}`
+      : "";
+    $("status").textContent =
+      `${job.phase}: ${job.message || job.status}` +
+      ` · inserted ${job.inserted}, updated ${job.updated}` +
+      filmProgress;
+    await refreshStats().catch(() => {});
+    if (browsing) {
+      await loadBrowse().catch(() => {});
+    }
+    if (job.status === "completed" || job.status === "failed") {
+      return job;
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+  }
+  throw new Error("Discover job timed out waiting for completion");
 }
 
 async function discover() {
@@ -315,24 +346,35 @@ async function discover() {
     return;
   }
   $("discover").disabled = true;
-  $("status").textContent = `Discovering songs for “${seed}” via Wikipedia / Wikidata…`;
+  $("status").textContent = `Queuing continuous discovery for “${seed}”…`;
   try {
     const result = await api("/api/discover", {
       method: "POST",
       body: JSON.stringify({
         seeds: [seed],
-        limit_per_seed: 200,
+        limit_per_seed: 0,
       }),
     });
-    const row = result.results?.[0];
-    const err = row?.error ? ` — ${row.error}` : "";
-    $("status").textContent =
-      `Found ${row?.found ?? 0}, inserted ${result.total_inserted}, skipped ${result.total_skipped}` +
-      (row?.entity_label ? ` (${row.entity_label})` : "") +
-      err;
     browsing = true;
     $("browse").classList.add("active");
-    await loadBrowse();
+
+    if (result.job_ids?.length) {
+      const job = await pollDiscoverJob(result.job_ids[0]);
+      const err = job.error ? ` — ${job.error}` : "";
+      $("status").textContent =
+        `Discovery ${job.status}: inserted ${job.inserted}, updated ${job.updated}, skipped ${job.skipped}` +
+        (job.entity_label ? ` (${job.entity_label})` : "") +
+        err;
+      await loadBrowse();
+    } else {
+      const row = result.results?.[0];
+      const err = row?.error ? ` — ${row.error}` : "";
+      $("status").textContent =
+        `Found ${row?.found ?? 0}, inserted ${result.total_inserted}, updated ${result.total_updated || 0}, skipped ${result.total_skipped}` +
+        (row?.entity_label ? ` (${row.entity_label})` : "") +
+        err;
+      await loadBrowse();
+    }
   } catch (err) {
     $("status").textContent = err.message || String(err);
   } finally {
