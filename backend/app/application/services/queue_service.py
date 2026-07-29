@@ -405,6 +405,15 @@ class QueueService:
         exclude_hashes = self._library_exclude_hashes(heard_snapshots)
         year_from = filters.year_from if filters else None
         year_to = filters.year_to if filters else None
+        languages = (
+            filters.preferred_languages
+            if filters and filters.preferred_languages
+            else self._user_languages(pref)
+        )
+        # "all" / empty means no language restriction on the catalog sample.
+        lang_filter = [
+            lang for lang in (languages or []) if lang and lang.casefold() != "all"
+        ] or None
         added = 0
 
         for composer in composers:
@@ -419,6 +428,7 @@ class QueueService:
                 seed=composer,
                 year_from=year_from,
                 year_to=year_to,
+                languages=lang_filter,
                 exclude_hashes=exclude_hashes,
                 only_mapped=True,
                 limit=pool_limit,
@@ -433,6 +443,7 @@ class QueueService:
                     seed=composer,
                     year_from=year_from,
                     year_to=year_to,
+                    languages=lang_filter,
                     exclude_hashes=exclude_hashes,
                     exclude_ids=exclude_ids,
                     only_mapped=False,
@@ -452,6 +463,7 @@ class QueueService:
                     seed=composer,
                     year_from=year_from,
                     year_to=year_to,
+                    languages=lang_filter,
                     exclude_hashes=exclude_hashes,
                     exclude_ids=[s.id for s in lib_songs if s.id],
                     only_mapped=True,
@@ -468,6 +480,7 @@ class QueueService:
                         seed=composer,
                         year_from=year_from,
                         year_to=year_to,
+                        languages=lang_filter,
                         exclude_hashes=exclude_hashes,
                         exclude_ids=[s.id for s in lib_songs if s.id],
                         only_mapped=False,

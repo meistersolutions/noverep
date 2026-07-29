@@ -124,6 +124,10 @@ class SampleRequest(BaseModel):
     composer: str | None = None
     seed: str | None = None
     moods: list[str] = Field(default_factory=list)
+    languages: list[str] = Field(
+        default_factory=list,
+        description="Language codes/labels to keep (e.g. tamil, hindi). Empty = any.",
+    )
     year_from: int | None = None
     year_to: int | None = None
     exclude_hashes: list[str] = Field(default_factory=list)
@@ -150,3 +154,34 @@ class StatsOut(BaseModel):
     by_composer: dict[str, int]
     mapped: int
     metadata_only: int
+
+
+class PlaylistExportItem(BaseModel):
+    song_id: str
+    song_name: str
+    movie_name: str | None = None
+    composer_name: str | None = None
+    youtube_video_id: str
+    youtube_url: str
+
+
+class PlaylistExportRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    song_ids: list[str] = Field(default_factory=list)
+    composer: str | None = None
+    movie: str | None = None
+    mood: str | None = None
+    year_from: int | None = None
+    year_to: int | None = None
+    only_mapped: bool = True
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class PlaylistExportResponse(BaseModel):
+    title: str
+    description: str | None = None
+    item_count: int
+    items: list[PlaylistExportItem]
+    youtube_watch_url: str | None = None
+    video_ids: list[str] = Field(default_factory=list)

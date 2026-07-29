@@ -23,6 +23,33 @@ from app.services.youtube_resolve import resolve_unmapped, resolve_one_song
 
 router = APIRouter(prefix="/api")
 
+# Map preference codes → labels/aliases stored on Song.language from Wikipedia.
+_LANGUAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "tamil": ("tamil", "tamizh", "ta", "தமிழ்"),
+    "hindi": ("hindi", "bollywood", "hi", "हिंदी", "हिन्दी"),
+    "telugu": ("telugu", "te", "తెలుగు"),
+    "malayalam": ("malayalam", "ml", "മലയാളം"),
+    "kannada": ("kannada", "kn", "ಕನ್ನಡ"),
+    "english": ("english", "en"),
+    "punjabi": ("punjabi", "pa", "ਪੰਜਾਬੀ"),
+}
+
+
+def _language_match_terms(languages: list[str]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in languages:
+        key = (raw or "").strip().casefold()
+        if not key:
+            continue
+        aliases = _LANGUAGE_ALIASES.get(key, (key,))
+        for alias in aliases:
+            a = alias.casefold()
+            if a not in seen:
+                seen.add(a)
+                terms.append(alias)
+    return terms
+
 
 @router.get("/health")
 def health():
@@ -263,6 +290,12 @@ def sample(body: SampleRequest, db: Session = Depends(get_db)):
         )
     if body.only_mapped:
         query = query.filter(Song.youtube_video_id.isnot(None))
+    if body.languages:
+        terms = _language_match_terms(body.languages)
+        if terms:
+            query = query.filter(
+                or_(*[Song.language.ilike(f"%{term}%") for term in terms])
+            )
     if body.exclude_hashes:
         query = query.filter(~Song.content_hash.in_(body.exclude_hashes))
     if body.exclude_ids:
