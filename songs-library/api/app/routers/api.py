@@ -262,7 +262,7 @@ def sample(body: SampleRequest, db: Session = Depends(get_db)):
             or_(Song.release_year.is_(None), Song.release_year <= body.year_to)
         )
     if body.only_mapped:
-        query = query.filter(Song.playability == "mapped")
+        query = query.filter(Song.youtube_video_id.isnot(None))
     if body.exclude_hashes:
         query = query.filter(~Song.content_hash.in_(body.exclude_hashes))
     if body.exclude_ids:
