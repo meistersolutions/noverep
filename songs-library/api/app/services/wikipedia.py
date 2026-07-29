@@ -61,7 +61,9 @@ class _WikiPageParser(HTMLParser):
             self._in_heading = True
             self._heading_parts = []
             return
-        if tag == "table" and "wikitable" in ad.get("class", ""):
+        if tag == "table" and (
+            "wikitable" in ad.get("class", "") or "tracklist" in ad.get("class", "")
+        ):
             self._in_table = True
             self._occupancy = []
             self._row_idx = 0
@@ -160,6 +162,7 @@ def _header_index(headers: list[str]) -> dict[str, int]:
         if key in ("song", "song title", "track"):
             mapping.setdefault("song", i)
         elif key == "title" and not looks_like_filmography and "film" not in lower:
+            # Discography "Title" or Template:Track listing "Title" column.
             mapping.setdefault("song", i)
         elif key in ("film", "movie", "album", "film / album", "film/album"):
             mapping.setdefault("film", i)
@@ -171,6 +174,8 @@ def _header_index(headers: list[str]) -> dict[str, int]:
             mapping.setdefault("lyricist", i)
         elif key == "language":
             mapping.setdefault("language", i)
+        elif "composer" in key:
+            mapping.setdefault("composer", i)
     return mapping
 
 
@@ -202,7 +207,12 @@ def _tables_to_works(
             song = row[song_i].strip()
             if not song or song.casefold() in ("song", "title", "track"):
                 continue
+            if song.casefold().startswith("total length"):
+                continue
             if song.startswith("http"):
+                continue
+            # Tracklist tables often put the track number in column 0 as a bare digit.
+            if song.isdigit():
                 continue
             film = row[film_i].strip() if film_i is not None and film_i < len(row) else None
             year = default_year
@@ -461,38 +471,117 @@ async def list_composer_films(
     return out, sorted(seen_pages)
 
 
+def _extract_soundtrack_page_links(html: str) -> list[str]:
+    """Find soundtrack album pages linked from a film article."""
+    titles: list[str] = []
+    seen: set[str] = set()
+    for raw in _extract_main_article_links(html):
+        if "soundtrack" in raw.casefold() and raw.casefold() not in seen:
+            seen.add(raw.casefold())
+            titles.append(raw)
+    for href in re.findall(r'href="/wiki/([^"#]+)"', html, flags=re.I):
+        title = unquote(href.replace("_", " "))
+        if "soundtrack" in title.casefold() and title.casefold() not in seen:
+            # Skip navbox noise like Category:...
+            if title.startswith("Category:") or title.startswith("Template:"):
+                continue
+            seen.add(title.casefold())
+            titles.append(title)
+    return titles
+
+
+def _prefer_film_title(candidates: list[str], film_name: str, year: int | None) -> str | None:
+    if not candidates:
+        return None
+    film_cf = film_name.casefold()
+    scored: list[tuple[int, str]] = []
+    for title in candidates:
+        low = title.casefold()
+        score = 0
+        if low == film_cf:
+            score += 50
+        if film_cf in low:
+            score += 20
+        if "(film)" in low:
+            score += 15
+        if year and str(year) in low:
+            score += 25
+        if "soundtrack" in low:
+            score -= 5
+        scored.append((score, title))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return scored[0][1] if scored and scored[0][0] > 0 else candidates[0]
+
+
 async def fetch_film_soundtrack_songs(
     film_name: str, *, year: int | None = None
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """Parse a film Wikipedia page for soundtrack / tracklist tables.
+    """Parse film + dedicated soundtrack Wikipedia pages for track listings.
 
-    Returns (works, wikipedia_page_title_or_none).
+    Modern Tamil film articles often only link to ``Film (soundtrack)`` pages whose
+    songs live in Template:Track listing tables (class=tracklist), not wikitables.
+
+    Returns (works, primary_wikipedia_page_title_or_none).
     """
     async with httpx.AsyncClient(timeout=60.0, headers=_headers()) as client:
         title = await _page_exists(client, film_name)
+        if year:
+            titled = await _page_exists(client, f"{film_name} ({year} film)")
+            if titled:
+                title = titled
         if not title:
             data = await _wiki_get(
                 client,
                 {
                     "action": "opensearch",
-                    "search": film_name,
-                    "limit": 5,
+                    "search": f"{film_name} {year}" if year else film_name,
+                    "limit": 8,
                     "format": "json",
                 },
             )
             titles = data[1] if isinstance(data, list) and len(data) > 1 else []
-            title = titles[0] if titles else None
-        if not title:
-            return [], None
-        page_title, _html, tables = await _parse_page_html(client, title)
-        works = _tables_to_works(tables, page_title=page_title)
-        for w in works:
+            title = _prefer_film_title([str(t) for t in titles], film_name, year)
+
+        pages: list[str] = []
+        if title:
+            pages.append(title)
+        for candidate in (
+            f"{film_name} (soundtrack)",
+            f"{film_name} ({year} soundtrack)" if year else None,
+        ):
+            if not candidate:
+                continue
+            resolved = await _page_exists(client, candidate)
+            if resolved and resolved not in pages:
+                pages.append(resolved)
+
+        primary_page: str | None = None
+        all_works: list[dict[str, Any]] = []
+        visited: set[str] = set()
+
+        for page in list(pages):
+            if page.casefold() in visited:
+                continue
+            visited.add(page.casefold())
+            try:
+                page_title, html, tables = await _parse_page_html(client, page)
+            except Exception:  # noqa: BLE001
+                continue
+            if primary_page is None:
+                primary_page = page_title
+            works = _tables_to_works(tables, page_title=page_title)
+            all_works.extend(works)
+            for link in _extract_soundtrack_page_links(html):
+                if link.casefold() not in visited and link not in pages:
+                    pages.append(link)
+
+        for w in all_works:
             if not w.get("movie_name"):
                 w["movie_name"] = film_name
             if not w.get("release_year") and year:
                 w["release_year"] = year
             w["source"] = "wikipedia_film"
-        return works, page_title
+        return _dedupe_works(all_works), primary_page
 
 
 def _dedupe_works(works: list[dict[str, Any]]) -> list[dict[str, Any]]:

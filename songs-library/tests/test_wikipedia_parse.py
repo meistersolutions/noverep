@@ -19,6 +19,46 @@ SAMPLE = """
 </table>
 """
 
+TRACKLIST = """
+<table class="tracklist">
+<caption><i>Dragon</i> (Tamil)</caption>
+<tbody>
+<tr>
+  <th scope="col">No.</th>
+  <th scope="col">Title</th>
+  <th scope="col">Lyrics</th>
+  <th scope="col">Singer(s)</th>
+  <th scope="col">Length</th>
+</tr>
+<tr>
+  <th scope="row">1.</th>
+  <td>"Yendi Vittu Pona"</td>
+  <td>Ko Sesha</td>
+  <td>Silambarasan</td>
+  <td>04:18</td>
+</tr>
+<tr>
+  <th scope="row">2.</th>
+  <td>"Rise of Dragon"</td>
+  <td>Vignesh Shivan</td>
+  <td>Anirudh Ravichander</td>
+  <td>03:32</td>
+</tr>
+<tr>
+  <th scope="row">3.</th>
+  <td>"Iraivaa"</td>
+  <td>Ko Sesha</td>
+  <td>Yuvan Shankar Raja</td>
+  <td>03:20</td>
+</tr>
+<tr class="tracklist-total-length">
+  <th colspan="4" scope="row"><span>Total length:</span></th>
+  <td>22:24</td>
+</tr>
+</tbody>
+</table>
+"""
+
 
 def test_rowspan_film_applies_to_second_song():
     parser = _WikiPageParser()
@@ -31,3 +71,12 @@ def test_rowspan_film_applies_to_second_song():
     assert works[1]["song_name"] == "Chinnakiliye"
     assert works[1]["movie_name"] == "16 Vayadhinile"
     assert works[1]["release_year"] == 1977
+
+
+def test_tracklist_table_parses_all_titles():
+    parser = _WikiPageParser()
+    parser.feed(TRACKLIST)
+    works = _tables_to_works(parser.tables, page_title="Dragon (soundtrack)")
+    names = [w["song_name"] for w in works]
+    assert names == ["Yendi Vittu Pona", "Rise of Dragon", "Iraivaa"]
+    assert all(w["wikipedia_title"] == "Dragon (soundtrack)" for w in works)

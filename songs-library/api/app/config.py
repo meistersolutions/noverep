@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     app_name: str = "Songs Library"
     # Local default SQLite; on Render/Neon set DATABASE_URL to Postgres.
     database_url: str = "sqlite:///./data/library.db"
-    user_agent: str = "SongsLibrary/0.1 (NoRepeat companion)"
+    user_agent: str = (
+        "SongsLibrary/0.1 (https://github.com/meistersolutions/noverep; songs-library)"
+    )
     wikidata_sparql_url: str = "https://query.wikidata.org/sparql"
     wikidata_api_url: str = "https://www.wikidata.org/w/api.php"
     # 0 = unlimited Wikipedia list ingest for sync discover.
@@ -21,6 +23,9 @@ class Settings(BaseSettings):
     enrich_idle_seconds: float = 20.0
     enrich_pause_seconds: float = 2.0
     youtube_resolve_limit: int = 20
+    youtube_resolve_batch_size: int = 10
+    youtube_resolve_idle_seconds: float = 30.0
+    youtube_resolve_pause_seconds: float = 3.0
     cors_origins: str = "*"
     port: int = 8100
 
