@@ -14,6 +14,7 @@ from app.application.services.language_utils import (
     random_lang_discovery_query,
     resolve_languages_from_prefs,
 )
+from app.application.services.library_hash import library_content_hash
 from app.application.services.memory_service import HeardSongSnapshot, MemoryService
 from app.application.services.recommendation_engine import RecommendationEngine
 from app.application.services.song_matcher import is_same_song
@@ -36,7 +37,9 @@ logger = structlog.get_logger()
 TARGET_QUEUE_SIZE = 20
 QUEUE_SYNC_TIMEOUT_SEC = 55.0
 MAX_ACTIVE_SEEDS = 5
-LIBRARY_POOL_LOW = 8
+LIBRARY_POOL_LOW = 30
+# How many upcoming library tracks to pre-resolve YouTube ids for (beyond mapped).
+LIBRARY_RESOLVE_AHEAD = 20
 
 
 @dataclass
@@ -300,66 +303,74 @@ class QueueService:
             )
         return queue
 
-    async def _library_song_to_track(
-        self,
-        session: AsyncSession,
-        user_id: UUID,
-        lib_song,
-        recent: dict,
-        filters: QueueRefreshFilters | None = None,
-        pref: UserPreferencesModel | None = None,
-    ) -> ProviderTrack | None:
-        """Map a catalog song to a playable ProviderTrack (YouTube id or search)."""
-        if lib_song.youtube_video_id:
-            artist = (
-                (lib_song.singers[0] if lib_song.singers else None)
-                or lib_song.composer_name
-                or "Unknown Artist"
-            )
-            return ProviderTrack(
-                provider="youtube",
-                provider_track_id=lib_song.youtube_video_id,
-                title=lib_song.song_name,
-                artist=artist,
-                album=lib_song.movie_name,
-                duration_seconds=None,
-                thumbnail_url=f"https://i.ytimg.com/vi/{lib_song.youtube_video_id}/hqdefault.jpg",
-                release_year=lib_song.release_year,
-                popularity=float(lib_song.popularity or 0) / 100.0,
-            )
-
-        youtube_discovery = self._youtube_discovery_enabled(pref)
-        if not youtube_discovery and self.songs_library and self.songs_library.enabled:
-            resolved = await self.songs_library.resolve_youtube_for_song(lib_song.id)
-            if resolved and resolved.youtube_video_id:
-                lib_song = resolved
-                artist = (
-                    (lib_song.singers[0] if lib_song.singers else None)
-                    or lib_song.composer_name
-                    or "Unknown Artist"
-                )
-                return ProviderTrack(
-                    provider="youtube",
-                    provider_track_id=lib_song.youtube_video_id,
-                    title=lib_song.song_name,
-                    artist=artist,
-                    album=lib_song.movie_name,
-                    duration_seconds=None,
-                    thumbnail_url=f"https://i.ytimg.com/vi/{lib_song.youtube_video_id}/hqdefault.jpg",
-                    release_year=lib_song.release_year,
-                    popularity=float(lib_song.popularity or 0) / 100.0,
-                )
+    @staticmethod
+    def _provider_track_from_library(lib_song) -> ProviderTrack | None:
+        """Build a ProviderTrack only when a YouTube video id is already known."""
+        video_id = getattr(lib_song, "youtube_video_id", None)
+        if not video_id:
             return None
-
-        candidates = await self._recommend(
-            session,
-            user_id,
-            lib_song.search_query(),
-            limit=3,
-            recent=recent,
-            filters=filters,
+        artist = (
+            (lib_song.singers[0] if lib_song.singers else None)
+            or lib_song.composer_name
+            or "Unknown Artist"
         )
-        return candidates[0].track if candidates else None
+        return ProviderTrack(
+            provider="youtube",
+            provider_track_id=video_id,
+            title=lib_song.song_name,
+            artist=artist,
+            album=lib_song.movie_name,
+            duration_seconds=None,
+            thumbnail_url=f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            release_year=lib_song.release_year,
+            popularity=float(lib_song.popularity or 0) / 100.0,
+        )
+
+    async def _ensure_library_youtube_ids(self, lib_songs: list, *, need: int) -> list:
+        """Prefer mapped songs; batch-resolve missing YouTube ids before enqueue.
+
+        Songs that still lack a video id after resolve are dropped (never queued).
+        """
+        if not lib_songs:
+            return []
+        mapped = [s for s in lib_songs if getattr(s, "youtube_video_id", None)]
+        unmapped = [s for s in lib_songs if not getattr(s, "youtube_video_id", None)]
+        # Resolve enough unmapped tracks to cover remaining queue slots (+ small buffer).
+        resolve_budget = max(0, min(len(unmapped), max(need, LIBRARY_RESOLVE_AHEAD) - len(mapped)))
+        to_resolve = unmapped[:resolve_budget]
+        if to_resolve and self.songs_library and self.songs_library.enabled:
+            resolved_map = await self.songs_library.resolve_youtube_many(
+                [s.id for s in to_resolve]
+            )
+            for song in to_resolve:
+                resolved = resolved_map.get(song.id)
+                if resolved and resolved.youtube_video_id:
+                    mapped.append(resolved)
+                # else: skip — do not enqueue without a video id
+            skipped = len(to_resolve) - sum(1 for s in to_resolve if s.id in resolved_map)
+            if skipped:
+                logger.info(
+                    "library_youtube_resolve_skipped",
+                    attempted=len(to_resolve),
+                    resolved=len(to_resolve) - skipped,
+                    skipped=skipped,
+                )
+        # Mapped first so already-known ids play immediately; newly resolved follow.
+        return mapped
+
+    def _library_exclude_hashes(self, heard_snapshots: list[HeardSongSnapshot]) -> list[str]:
+        """Approximate library content hashes for heard songs (never-repeat hint)."""
+        hashes: list[str] = []
+        for snap in heard_snapshots:
+            hashes.append(
+                library_content_hash(
+                    snap.title,
+                    None,
+                    snap.artist,
+                    None,
+                )
+            )
+        return hashes
 
     async def _append_from_songs_library(
         self,
@@ -373,19 +384,25 @@ class QueueService:
         filters: QueueRefreshFilters | None = None,
         recent: dict | None = None,
     ) -> list[QueueItemModel]:
-        """Fill queue slots from the standalone Songs Library catalog."""
+        """Fill queue slots from the standalone Songs Library catalog.
+
+        Every enqueued library track must already have a YouTube video id.
+        Prefers mapped catalog rows; batch-resolves a window of unmapped songs
+        before returning. Unresolvable songs are skipped (not left empty).
+        """
         if not self.songs_library or not self.songs_library.enabled:
             return queue
         if len(queue) >= target_size:
             return queue
 
-        recent = recent or await self._recent_context(session, user_id)
         active = self._normalize_seeds(seeds) or self._active_seeds(pref)
         composers = active if active else [None]
 
         existing = await self._queue_track_ids(queue)
         existing_songs = await self._queue_song_ids(queue)
         blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+        heard_snapshots = await self.memory.get_heard_song_snapshots(session, user_id)
+        exclude_hashes = self._library_exclude_hashes(heard_snapshots)
         year_from = filters.year_from if filters else None
         year_to = filters.year_to if filters else None
         added = 0
@@ -394,30 +411,77 @@ class QueueService:
             if len(queue) >= target_size:
                 break
             need = target_size - len(queue)
-            lib_songs = await self.songs_library.sample(
+            pool_limit = max(need * 2, LIBRARY_POOL_LOW)
+
+            # Fast path: already-mapped songs (youtube_video_id present).
+            mapped = await self.songs_library.sample(
                 composer=composer,
                 seed=composer,
                 year_from=year_from,
                 year_to=year_to,
-                limit=max(need * 2, LIBRARY_POOL_LOW),
+                exclude_hashes=exclude_hashes,
+                only_mapped=True,
+                limit=pool_limit,
             )
-            if len(lib_songs) < LIBRARY_POOL_LOW and composer:
-                # Catalog thin for this seed — grow it in the background path (best-effort).
-                await self.songs_library.discover([composer], limit_per_seed=50)
-                lib_songs = await self.songs_library.sample(
+            lib_songs = list(mapped)
+
+            # Top up with unmapped + parallel resolve when mapped pool is thin.
+            if len(lib_songs) < need:
+                exclude_ids = [s.id for s in lib_songs if s.id]
+                unmapped_pool = await self.songs_library.sample(
                     composer=composer,
                     seed=composer,
                     year_from=year_from,
                     year_to=year_to,
-                    limit=max(need * 2, LIBRARY_POOL_LOW),
+                    exclude_hashes=exclude_hashes,
+                    exclude_ids=exclude_ids,
+                    only_mapped=False,
+                    limit=pool_limit,
                 )
+                # Prefer rows that somehow already have an id; resolve the rest.
+                lib_songs = await self._ensure_library_youtube_ids(
+                    lib_songs + unmapped_pool,
+                    need=need,
+                )
+
+            if len(lib_songs) < LIBRARY_POOL_LOW and composer:
+                # Catalog thin for this seed — queue continuous discovery (best-effort).
+                await self.songs_library.discover([composer])
+                more_mapped = await self.songs_library.sample(
+                    composer=composer,
+                    seed=composer,
+                    year_from=year_from,
+                    year_to=year_to,
+                    exclude_hashes=exclude_hashes,
+                    exclude_ids=[s.id for s in lib_songs if s.id],
+                    only_mapped=True,
+                    limit=pool_limit,
+                )
+                if more_mapped:
+                    lib_songs = await self._ensure_library_youtube_ids(
+                        lib_songs + more_mapped,
+                        need=need,
+                    )
+                elif len(lib_songs) < need:
+                    more = await self.songs_library.sample(
+                        composer=composer,
+                        seed=composer,
+                        year_from=year_from,
+                        year_to=year_to,
+                        exclude_hashes=exclude_hashes,
+                        exclude_ids=[s.id for s in lib_songs if s.id],
+                        only_mapped=False,
+                        limit=pool_limit,
+                    )
+                    lib_songs = await self._ensure_library_youtube_ids(
+                        lib_songs + more,
+                        need=need,
+                    )
 
             for lib_song in lib_songs:
                 if len(queue) >= target_size:
                     break
-                track = await self._library_song_to_track(
-                    session, user_id, lib_song, recent, filters=filters, pref=pref
-                )
+                track = self._provider_track_from_library(lib_song)
                 if not track:
                     continue
                 candidate = SimpleNamespace(track=track)

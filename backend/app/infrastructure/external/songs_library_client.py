@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 import httpx
@@ -10,6 +11,9 @@ import structlog
 from app.config import settings
 
 logger = structlog.get_logger()
+
+# Cap concurrent yt-dlp resolves so queue fill does not stampede YouTube.
+RESOLVE_YOUTUBE_CONCURRENCY = 5
 
 
 @dataclass
@@ -144,3 +148,45 @@ class SongsLibraryClient:
                 song_id=song_id,
             )
             return None
+
+    async def resolve_youtube_many(
+        self,
+        song_ids: list[str],
+        *,
+        concurrency: int = RESOLVE_YOUTUBE_CONCURRENCY,
+    ) -> dict[str, LibrarySong]:
+        """Resolve YouTube ids for many catalog songs in parallel.
+
+        Returns a map of song_id -> LibrarySong for songs that resolved successfully.
+        Unresolvable songs are omitted (callers should skip them).
+        """
+        if not self.enabled or not song_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(sid for sid in song_ids if sid))
+        if not unique_ids:
+            return {}
+
+        sem = asyncio.Semaphore(max(1, concurrency))
+        resolved: dict[str, LibrarySong] = {}
+
+        async def _one(song_id: str) -> None:
+            async with sem:
+                song = await self.resolve_youtube_for_song(song_id)
+            if song and song.youtube_video_id:
+                resolved[song_id] = song
+
+        await asyncio.gather(*(_one(sid) for sid in unique_ids))
+        return resolved
+
+    async def export_playlist(self, payload: dict) -> dict:
+        """Export mapped songs as a YouTube playlist payload (P4 foundation)."""
+        if not self.enabled:
+            return {"item_count": 0, "items": []}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(f"{self.base_url}/api/playlists/export", json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("songs_library_export_playlist_failed", error=str(exc))
+            return {"item_count": 0, "items": [], "error": str(exc)}

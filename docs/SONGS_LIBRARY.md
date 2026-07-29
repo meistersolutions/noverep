@@ -28,7 +28,7 @@ SONGS_LIBRARY_URL=http://127.0.0.1:8100
 SONGS_LIBRARY_ENABLED=true
 ```
 
-When enabled, `QueueService` samples the library for active seeds **before** live YouTube search / home fallback. Unmapped catalog songs are resolved via a targeted YouTube search on title + movie + composer.
+When enabled, `QueueService` samples the library for active seeds **before** live YouTube search / home fallback. It prefers already-mapped songs (`youtube_video_id` set). Any unmapped candidates needed to fill the queue are batch-resolved via the library resolve endpoint **before** enqueue; songs that cannot be resolved are skipped.
 
 See [songs-library/INTEGRATION.md](../songs-library/INTEGRATION.md).
 

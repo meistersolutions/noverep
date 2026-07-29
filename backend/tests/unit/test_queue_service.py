@@ -145,3 +145,101 @@ class TestInterleaveSeedQueries:
         joined = " ".join(queries).lower()
         assert "rahman" in joined
         assert "coldplay" in joined
+
+
+class TestProviderTrackFromLibrary:
+    def setup_method(self):
+        self.svc = _svc()
+
+    def test_requires_youtube_video_id(self):
+        song = SimpleNamespace(
+            youtube_video_id=None,
+            singers=["A"],
+            composer_name="C",
+            song_name="S",
+            movie_name="M",
+            release_year=1990,
+            popularity=80,
+        )
+        assert self.svc._provider_track_from_library(song) is None
+
+    def test_maps_video_id_to_provider_track(self):
+        song = SimpleNamespace(
+            youtube_video_id="dQw4w9WgXcQ",
+            singers=["Kamal"],
+            composer_name="Ilaiyaraaja",
+            song_name="Thenpandi",
+            movie_name="Nayakan",
+            release_year=1987,
+            popularity=90,
+        )
+        track = self.svc._provider_track_from_library(song)
+        assert track is not None
+        assert track.provider == "youtube"
+        assert track.provider_track_id == "dQw4w9WgXcQ"
+        assert track.title == "Thenpandi"
+        assert "dQw4w9WgXcQ" in (track.thumbnail_url or "")
+
+
+class TestEnsureLibraryYoutubeIds:
+    def setup_method(self):
+        self.mapped = SimpleNamespace(
+            id="m1",
+            youtube_video_id="aaaaaaaaaaa",
+            song_name="Mapped",
+        )
+        self.unmapped_ok = SimpleNamespace(
+            id="u1",
+            youtube_video_id=None,
+            song_name="Unmapped OK",
+        )
+        self.unmapped_fail = SimpleNamespace(
+            id="u2",
+            youtube_video_id=None,
+            song_name="Unmapped Fail",
+        )
+
+    async def test_keeps_mapped_and_skips_failed_resolve(self):
+        async def fake_resolve_many(ids):
+            assert "u1" in ids
+            assert "u2" in ids
+            return {
+                "u1": SimpleNamespace(
+                    id="u1",
+                    youtube_video_id="bbbbbbbbbbb",
+                    song_name="Unmapped OK",
+                )
+            }
+
+        lib = SimpleNamespace(enabled=True, resolve_youtube_many=fake_resolve_many)
+        svc = _svc(songs_library=lib)
+        out = await svc._ensure_library_youtube_ids(
+            [self.mapped, self.unmapped_ok, self.unmapped_fail],
+            need=3,
+        )
+        ids = [s.id for s in out]
+        assert ids == ["m1", "u1"]
+        assert all(getattr(s, "youtube_video_id", None) for s in out)
+
+    async def test_does_not_resolve_when_mapped_covers_need(self):
+        called = {"n": 0}
+
+        async def fake_resolve_many(ids):
+            called["n"] += 1
+            return {}
+
+        lib = SimpleNamespace(enabled=True, resolve_youtube_many=fake_resolve_many)
+        svc = _svc(songs_library=lib)
+        # need=1 and one mapped → resolve_budget = max(1,20)-1 = 19, still may resolve.
+        # With LIBRARY_RESOLVE_AHEAD, we still resolve ahead. Use enough mapped.
+        many_mapped = [
+            SimpleNamespace(id=f"m{i}", youtube_video_id=f"{i:011d}", song_name=f"S{i}")
+            for i in range(25)
+        ]
+        out = await svc._ensure_library_youtube_ids(
+            many_mapped + [self.unmapped_ok],
+            need=5,
+        )
+        assert called["n"] == 0
+        assert len(out) == 25
+        assert all(s.youtube_video_id for s in out)
