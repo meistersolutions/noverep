@@ -124,17 +124,17 @@ def merge_and_upsert_works(
         if not existing:
             merged[key] = work
             continue
-            for field in (
-                "movie_name",
-                "release_year",
-                "wikidata_id",
-                "musicbrainz_id",
-                "wikipedia_title",
-                "language",
-            ):
-                if not existing.get(field) and work.get(field):
-                    existing[field] = work[field]
-            for field in ("singers", "lyricists", "directors", "actors", "actresses"):
+        for field in (
+            "movie_name",
+            "release_year",
+            "wikidata_id",
+            "musicbrainz_id",
+            "wikipedia_title",
+            "language",
+        ):
+            if not existing.get(field) and work.get(field):
+                existing[field] = work[field]
+        for field in ("singers", "lyricists", "directors", "actors", "actresses"):
             for item in work.get(field) or []:
                 if item not in existing.setdefault(field, []):
                     existing[field].append(item)
@@ -144,18 +144,18 @@ def merge_and_upsert_works(
 
     inserted = skipped = updated = 0
     for work in merged.values():
-            create = SongCreate(
-                song_name=work["song_name"].strip(),
-                movie_name=work.get("movie_name"),
-                release_year=work.get("release_year"),
-                composer_name=composer_name,
-                singers=work.get("singers") or [],
-                lyricists=work.get("lyricists") or [],
-                language=work.get("language"),
-                directors=work.get("directors") or [],
-                actors=work.get("actors") or [],
-                actresses=work.get("actresses") or [],
-                popularity=55.0,
+        create = SongCreate(
+            song_name=work["song_name"].strip(),
+            movie_name=work.get("movie_name"),
+            release_year=work.get("release_year"),
+            composer_name=composer_name,
+            singers=work.get("singers") or [],
+            lyricists=work.get("lyricists") or [],
+            language=work.get("language"),
+            directors=work.get("directors") or [],
+            actors=work.get("actors") or [],
+            actresses=work.get("actresses") or [],
+            popularity=55.0,
             wikidata_id=work.get("wikidata_id"),
             musicbrainz_id=work.get("musicbrainz_id"),
             wikipedia_title=work.get("wikipedia_title"),
