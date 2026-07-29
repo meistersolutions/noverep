@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     # Standalone Songs Library (catalog-backed discovery)
     songs_library_url: str = ""
     songs_library_enabled: bool = False
+    # Ping Songs Library this often (seconds) so Render free tier stays awake.
+    songs_library_keepalive_seconds: int = 60
 
     @property
     def cors_origin_list(self) -> list[str]:

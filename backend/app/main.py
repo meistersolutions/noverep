@@ -1,3 +1,4 @@
+import asyncio
 import structlog
 from contextlib import asynccontextmanager
 
@@ -115,9 +116,31 @@ async def lifespan(app: FastAPI):
             )
         )
     await _seed_admin_user()
+
+    stop_event = asyncio.Event()
+    keepalive_task: asyncio.Task | None = None
+    if settings.songs_library_enabled and settings.songs_library_url:
+        from app.application.tasks.songs_library_keepalive import (
+            songs_library_keepalive_loop,
+        )
+
+        keepalive_task = asyncio.create_task(
+            songs_library_keepalive_loop(stop_event),
+            name="songs-library-keepalive",
+        )
+
     logger.info("startup_complete")
-    yield
-    await engine.dispose()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        if keepalive_task is not None:
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
+        await engine.dispose()
 
 
 app = FastAPI(

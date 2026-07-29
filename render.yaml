@@ -31,6 +31,8 @@ services:
         value: https://songs-library.onrender.com
       - key: SONGS_LIBRARY_ENABLED
         value: "true"
+      - key: SONGS_LIBRARY_KEEPALIVE_SECONDS
+        value: "60"
 
   - type: web
     name: noverep
