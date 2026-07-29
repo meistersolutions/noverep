@@ -29,12 +29,14 @@ from app.infrastructure.database.models import (
 
 if TYPE_CHECKING:
     from app.application.services.home_recommendations import HomeRecommendationService
+    from app.infrastructure.external.songs_library_client import SongsLibraryClient
 
 logger = structlog.get_logger()
 
 TARGET_QUEUE_SIZE = 20
 QUEUE_SYNC_TIMEOUT_SEC = 55.0
 MAX_ACTIVE_SEEDS = 5
+LIBRARY_POOL_LOW = 8
 
 
 @dataclass
@@ -63,11 +65,13 @@ class QueueService:
         memory_service: MemoryService,
         normalizer: SongNormalizer,
         home_recommendations: "HomeRecommendationService | None" = None,
+        songs_library: "SongsLibraryClient | None" = None,
     ):
         self.recommendation = recommendation_engine
         self.memory = memory_service
         self.normalizer = normalizer
         self.home = home_recommendations
+        self.songs_library = songs_library
 
     async def get_queue(self, session: AsyncSession, user_id: UUID) -> list[QueueItemModel]:
         result = await session.execute(
@@ -288,6 +292,133 @@ class QueueService:
                 user_id=str(user_id),
                 added=added,
                 size=len(queue),
+            )
+        return queue
+
+    async def _library_song_to_track(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        lib_song,
+        recent: dict,
+        filters: QueueRefreshFilters | None = None,
+    ) -> ProviderTrack | None:
+        """Map a catalog song to a playable ProviderTrack (YouTube id or search)."""
+        if lib_song.youtube_video_id:
+            artist = (
+                (lib_song.singers[0] if lib_song.singers else None)
+                or lib_song.composer_name
+                or "Unknown Artist"
+            )
+            return ProviderTrack(
+                provider="youtube",
+                provider_track_id=lib_song.youtube_video_id,
+                title=lib_song.song_name,
+                artist=artist,
+                album=lib_song.movie_name,
+                duration_seconds=None,
+                thumbnail_url=f"https://i.ytimg.com/vi/{lib_song.youtube_video_id}/hqdefault.jpg",
+                release_year=lib_song.release_year,
+                popularity=float(lib_song.popularity or 0) / 100.0,
+            )
+
+        candidates = await self._recommend(
+            session,
+            user_id,
+            lib_song.search_query(),
+            limit=3,
+            recent=recent,
+            filters=filters,
+        )
+        return candidates[0].track if candidates else None
+
+    async def _append_from_songs_library(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        queue: list[QueueItemModel],
+        target_size: int,
+        *,
+        pref: UserPreferencesModel | None = None,
+        seeds: list[str] | None = None,
+        filters: QueueRefreshFilters | None = None,
+        recent: dict | None = None,
+    ) -> list[QueueItemModel]:
+        """Fill queue slots from the standalone Songs Library catalog."""
+        if not self.songs_library or not self.songs_library.enabled:
+            return queue
+        if len(queue) >= target_size:
+            return queue
+
+        recent = recent or await self._recent_context(session, user_id)
+        active = self._normalize_seeds(seeds) or self._active_seeds(pref)
+        composers = active if active else [None]
+
+        existing = await self._queue_track_ids(queue)
+        existing_songs = await self._queue_song_ids(queue)
+        blocked_songs = await self.memory.get_blocked_song_ids(session, user_id)
+        year_from = filters.year_from if filters else None
+        year_to = filters.year_to if filters else None
+        added = 0
+
+        for composer in composers:
+            if len(queue) >= target_size:
+                break
+            need = target_size - len(queue)
+            lib_songs = await self.songs_library.sample(
+                composer=composer,
+                seed=composer,
+                year_from=year_from,
+                year_to=year_to,
+                limit=max(need * 2, LIBRARY_POOL_LOW),
+            )
+            if len(lib_songs) < LIBRARY_POOL_LOW and composer:
+                # Catalog thin for this seed — grow it in the background path (best-effort).
+                await self.songs_library.discover([composer], limit_per_seed=50)
+                lib_songs = await self.songs_library.sample(
+                    composer=composer,
+                    seed=composer,
+                    year_from=year_from,
+                    year_to=year_to,
+                    limit=max(need * 2, LIBRARY_POOL_LOW),
+                )
+
+            for lib_song in lib_songs:
+                if len(queue) >= target_size:
+                    break
+                track = await self._library_song_to_track(
+                    session, user_id, lib_song, recent, filters=filters
+                )
+                if not track:
+                    continue
+                candidate = SimpleNamespace(track=track)
+                if self._skip_recommendation_candidate(
+                    candidate, existing, existing_songs, blocked_songs
+                ):
+                    continue
+                try:
+                    is_first = len(queue) == 0
+                    item = await self._append_track(
+                        session,
+                        user_id,
+                        track,
+                        len(queue),
+                        is_current=is_first,
+                    )
+                    queue.append(item)
+                    existing.add(item.provider_track_id)
+                    existing_songs.add(item.song_id)
+                    added += 1
+                except ValueError:
+                    continue
+
+        if added:
+            logger.info(
+                "queue_filled_from_songs_library",
+                user_id=str(user_id),
+                added=added,
+                size=len(queue),
+                seeds=active,
             )
         return queue
 
@@ -651,6 +782,16 @@ class QueueService:
         pref = prefs_result.scalar_one_or_none()
         recent = await self._recent_context(session, user_id)
 
+        queue = await self._append_from_songs_library(
+            session,
+            user_id,
+            queue,
+            target_size,
+            pref=pref,
+            filters=None,
+            recent=recent,
+        )
+
         queries = self._build_discovery_queries(pref, current=current)
 
         query_idx = 0
@@ -747,6 +888,18 @@ class QueueService:
         elif seeds:
             await self._persist_active_seeds(session, pref, seeds)
 
+        queue = await self.get_queue(session, user_id)
+        queue = await self._append_from_songs_library(
+            session,
+            user_id,
+            queue,
+            target_size,
+            pref=pref,
+            seeds=seeds or None,
+            filters=filters,
+            recent=recent,
+        )
+
         queries = self._build_discovery_queries(
             pref,
             current=current,
@@ -756,7 +909,6 @@ class QueueService:
             filters=filters,
         )
 
-        queue = await self.get_queue(session, user_id)
         query_idx = 0
         attempts = 0
         max_attempts = min(target_size * 2 + len(seeds) * 2, 24)
@@ -827,6 +979,14 @@ class QueueService:
         pref = prefs_result.scalar_one_or_none()
         recent = await self._recent_context(session, user_id)
         queue: list[QueueItemModel] = []
+        queue = await self._append_from_songs_library(
+            session,
+            user_id,
+            queue,
+            target_size,
+            pref=pref,
+            recent=recent,
+        )
         queries = self._build_discovery_queries(pref)
         query_idx = 0
         attempts = 0

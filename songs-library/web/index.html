@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Songs Library</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">Standalone catalog</p>
+      <h1>Songs Library</h1>
+      <p class="sub">Film songs for NoRepeat — browse without the player app.</p>
+    </div>
+    <div id="stats" class="stats"></div>
+  </header>
+
+  <section class="controls">
+    <input id="q" type="search" placeholder="Search song, movie, composer…" />
+    <select id="composer">
+      <option value="">All composers</option>
+      <option>Ilaiyaraaja</option>
+      <option>A. R. Rahman</option>
+      <option>Yuvan Shankar Raja</option>
+    </select>
+    <button id="refresh" type="button">Refresh</button>
+    <button id="discover" type="button" class="accent">Discover 3 composers</button>
+  </section>
+
+  <p id="status" class="status"></p>
+  <div id="list" class="list"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
