@@ -21,6 +21,7 @@ from app.application.dto.schemas import (
     HomeRecommendationsResponse,
     HomeSectionResponse,
     LoginRequest,
+    LogoutRequest,
     OnboardingRequest,
     PlayEventRequest,
     LikedStatusResponse,
@@ -31,6 +32,7 @@ from app.application.dto.schemas import (
     PlaylistTrackResponse,
     QueueItemResponse,
     RegisterRequest,
+    RefreshRequest,
     RemoveQueueItemRequest,
     RemoveQueueItemResponse,
     SearchResponse,
@@ -70,7 +72,7 @@ from app.dependencies import (
     get_recommendation_engine,
     get_statistics_service,
 )
-from app.infrastructure.auth.auth_service import AuthService, create_access_token
+from app.infrastructure.auth.auth_service import AuthService
 from app.infrastructure.database.models import (
     ArtistModel,
     FeedbackModel,
@@ -137,9 +139,13 @@ async def register(
         user = await auth.register(session, body.username, body.email, body.password)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    token = create_access_token(user.id, user.username)
+    access_token, refresh_token = await auth.issue_token_pair(session, user)
     return TokenResponse(
-        access_token=token, user_id=user.id, username=user.username, is_guest=user.is_guest
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_id=user.id,
+        username=user.username,
+        is_guest=user.is_guest,
     )
 
 
@@ -153,9 +159,13 @@ async def login(
         user = await auth.login(session, body.username, body.password)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
-    token = create_access_token(user.id, user.username)
+    access_token, refresh_token = await auth.issue_token_pair(session, user)
     return TokenResponse(
-        access_token=token, user_id=user.id, username=user.username, is_guest=user.is_guest
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_id=user.id,
+        username=user.username,
+        is_guest=user.is_guest,
     )
 
 
@@ -165,9 +175,13 @@ async def guest_login(
     auth: AuthService = Depends(get_auth_service),
 ):
     user = await auth.create_guest(session)
-    token = create_access_token(user.id, user.username)
+    access_token, refresh_token = await auth.issue_token_pair(session, user)
     return TokenResponse(
-        access_token=token, user_id=user.id, username=user.username, is_guest=True
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_id=user.id,
+        username=user.username,
+        is_guest=True,
     )
 
 
@@ -200,10 +214,43 @@ async def google_auth(
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Google auth failed: {e}")
 
-    token = create_access_token(user.id, user.username)
+    access_token, refresh_token = await auth.issue_token_pair(session, user)
     return TokenResponse(
-        access_token=token, user_id=user.id, username=user.username, is_guest=user.is_guest
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_id=user.id,
+        username=user.username,
+        is_guest=user.is_guest,
     )
+
+
+@router.post("/auth/refresh", response_model=TokenResponse)
+async def refresh_auth(
+    body: RefreshRequest,
+    session: AsyncSession = Depends(get_db_session),
+    auth: AuthService = Depends(get_auth_service),
+):
+    try:
+        user, access_token, refresh_token = await auth.refresh_tokens(session, body.refresh_token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_id=user.id,
+        username=user.username,
+        is_guest=user.is_guest,
+    )
+
+
+@router.post("/auth/logout", status_code=204)
+async def logout(
+    body: LogoutRequest,
+    session: AsyncSession = Depends(get_db_session),
+    auth: AuthService = Depends(get_auth_service),
+):
+    if body.refresh_token:
+        await auth.revoke_refresh_token(session, body.refresh_token)
 
 
 @router.get("/search", response_model=SearchResponse)

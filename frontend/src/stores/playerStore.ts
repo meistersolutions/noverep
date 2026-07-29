@@ -29,6 +29,18 @@ import {
   syncHeardFromHistory,
 } from '@/lib/heardTracksCache';
 import { savePlaybackPosition, clearPlaybackPosition } from '@/lib/playbackPositionCache';
+import {
+  AUTH_KEYS,
+  clearStoredAuth,
+  getAccessTokenSync,
+  hasStoredAuthSync,
+  setStoredAuth,
+} from '@/lib/authStorage';
+import {
+  clearRefreshTimer,
+  revokeRefreshTokenOnLogout,
+  scheduleAccessTokenRefresh,
+} from '@/lib/authSession';
 import toast from 'react-hot-toast';
 
 const cachedPreferences = readCachedPreferences();
@@ -42,7 +54,7 @@ const cachedQueueSnapshot = cachedQueueRaw
       ),
     }
   : null;
-const hasStoredToken = !!localStorage.getItem('noverep_token');
+const hasStoredToken = hasStoredAuthSync();
 
 let advancingNext = false;
 
@@ -245,8 +257,8 @@ interface PlayerState {
   activePlaylistId: string | null;
 
   init: () => Promise<void>;
-  setAuth: (token: string, username: string, isGuest: boolean) => void;
-  logout: () => void;
+  setAuth: (token: string, refreshToken: string, username: string, isGuest: boolean) => void;
+  logout: (options?: { skipServerRevoke?: boolean }) => void;
   setPlaying: (playing: boolean) => void;
   setVolume: (v: number) => void;
   setCurrentTime: (t: number) => void;
@@ -284,9 +296,9 @@ interface PlayerState {
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
-  token: localStorage.getItem('noverep_token'),
-  username: localStorage.getItem('noverep_username'),
-  isGuest: localStorage.getItem('noverep_guest') === 'true',
+  token: getAccessTokenSync(),
+  username: localStorage.getItem(AUTH_KEYS.username),
+  isGuest: localStorage.getItem(AUTH_KEYS.guest) === 'true',
   sessionId: ensureSessionId(),
   currentTrack: cachedQueueSnapshot?.currentTrack ?? null,
   queue: cachedQueueSnapshot?.queue ?? [],
@@ -305,17 +317,23 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   activePlaylistId:
     cachedQueueSnapshot?.activePlaylistId ?? cachedPreferences?.active_playlist_id ?? null,
 
-  setAuth: (token, username, isGuest) => {
-    localStorage.setItem('noverep_token', token);
-    localStorage.setItem('noverep_username', username);
-    localStorage.setItem('noverep_guest', String(isGuest));
+  setAuth: (token, refreshToken, username, isGuest) => {
+    void setStoredAuth({
+      accessToken: token,
+      refreshToken,
+      username,
+      isGuest,
+    });
+    scheduleAccessTokenRefresh(token);
     set({ token, username, isGuest });
   },
 
-  logout: () => {
-    localStorage.removeItem('noverep_token');
-    localStorage.removeItem('noverep_username');
-    localStorage.removeItem('noverep_guest');
+  logout: (options) => {
+    clearRefreshTimer();
+    if (!options?.skipServerRevoke) {
+      void revokeRefreshTokenOnLogout();
+    }
+    void clearStoredAuth();
     localStorage.removeItem('noverep_display_name');
     clearCachedPreferences();
     clearSessionContentCaches();
@@ -339,6 +357,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   init: async () => {
     const { token, sessionId, initialized } = get();
     if (!token) return;
+    scheduleAccessTokenRefresh(token);
     if (initialized && get().preferences) {
       void get().refreshQueueInBackground();
       return;

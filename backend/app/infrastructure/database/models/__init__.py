@@ -40,6 +40,7 @@ class UserModel(Base):
 
     preferences: Mapped["UserPreferencesModel"] = relationship(back_populates="user", uselist=False)
     sessions: Mapped[list["SessionModel"]] = relationship(back_populates="user")
+    refresh_tokens: Mapped[list["RefreshTokenModel"]] = relationship(back_populates="user")
 
 
 class ArtistModel(Base):
@@ -166,6 +167,22 @@ class SessionModel(Base):
 
     user: Mapped[UserModel] = relationship(back_populates="sessions")
     history: Mapped[list[ListeningHistoryModel]] = relationship(back_populates="session")
+
+
+class RefreshTokenModel(Base):
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    device_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[UserModel] = relationship(back_populates="refresh_tokens")
+
+    __table_args__ = (Index("ix_refresh_tokens_user", "user_id"),)
 
 
 class QueueItemModel(Base):

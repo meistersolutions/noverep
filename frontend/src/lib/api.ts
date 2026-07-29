@@ -93,9 +93,13 @@ export interface Statistics {
   listening_heatmap: Record<string, number>;
 }
 
-function getToken(): string | null {
-  return localStorage.getItem('noverep_token');
-}
+import {
+  getAccessTokenSync,
+} from '@/lib/authStorage';
+import {
+  handleAuthExpired,
+  tryRefreshAccessToken,
+} from '@/lib/authSession';
 
 export class ApiError extends Error {
   status: number;
@@ -109,18 +113,17 @@ export class ApiError extends Error {
 
 let handlingUnauthorized = false;
 
-function handleUnauthorized() {
+async function handleUnauthorized() {
   if (handlingUnauthorized) return;
   handlingUnauthorized = true;
-  localStorage.removeItem('noverep_token');
-  // Lazy import avoids a circular dependency with playerStore.
-  void import('@/stores/playerStore')
-    .then(({ usePlayerStore }) => {
-      usePlayerStore.getState().logout();
-    })
-    .finally(() => {
-      handlingUnauthorized = false;
-    });
+  try {
+    const refreshed = await tryRefreshAccessToken();
+    if (!refreshed) {
+      await handleAuthExpired();
+    }
+  } finally {
+    handlingUnauthorized = false;
+  }
 }
 
 function formatApiError(detail: unknown): string {
@@ -148,8 +151,9 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
   timeoutMs = 120_000,
+  isRetry = false,
 ): Promise<T> {
-  const token = getToken();
+  const token = getAccessTokenSync();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -168,7 +172,13 @@ async function request<T>(
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       if (res.status === 401) {
-        handleUnauthorized();
+        if (!isRetry) {
+          const refreshed = await tryRefreshAccessToken();
+          if (refreshed) {
+            return request<T>(path, options, timeoutMs, true);
+          }
+        }
+        await handleUnauthorized();
         throw new ApiError('Session expired — please sign in again', 401);
       }
       throw new ApiError(formatApiError(err.detail) || res.statusText, res.status);
@@ -189,20 +199,30 @@ async function request<T>(
 
 export const api = {
   guestLogin: () =>
-    request<{ access_token: string; username: string; is_guest: boolean }>(
+    request<{ access_token: string; refresh_token: string; username: string; is_guest: boolean }>(
       '/auth/guest',
       { method: 'POST' },
     ),
   login: (username: string, password: string) =>
-    request<{ access_token: string; username: string; is_guest: boolean }>(
+    request<{ access_token: string; refresh_token: string; username: string; is_guest: boolean }>(
       '/auth/login',
       { method: 'POST', body: JSON.stringify({ username, password }) },
     ),
   register: (username: string, password: string, email?: string) =>
-    request<{ access_token: string; username: string; is_guest: boolean }>(
+    request<{ access_token: string; refresh_token: string; username: string; is_guest: boolean }>(
       '/auth/register',
       { method: 'POST', body: JSON.stringify({ username, password, email }) },
     ),
+  refreshAuth: (refreshToken: string) =>
+    request<{ access_token: string; refresh_token: string; username: string; is_guest: boolean }>(
+      '/auth/refresh',
+      { method: 'POST', body: JSON.stringify({ refresh_token: refreshToken }) },
+    ),
+  logout: (refreshToken?: string | null) =>
+    request<void>('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token: refreshToken || null }),
+    }),
   search: async (
     q: string,
     provider = 'youtube',
@@ -386,7 +406,7 @@ export const api = {
       }[]
     >('/history'),
   exportHistoryCsv: async () => {
-    const token = getToken();
+    const token = getAccessTokenSync();
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(`${API_URL}/history/export.csv`, { headers });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration } from './lib/api';
+import { formatDuration } from './api';
 
 describe('formatDuration', () => {
   it('formats seconds correctly', () => {

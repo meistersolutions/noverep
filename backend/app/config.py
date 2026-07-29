@@ -13,6 +13,10 @@ class Settings(BaseSettings):
 
     secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
+    # Short-lived access JWT; clients renew via refresh token.
+    jwt_access_expire_minutes: int = 60
+    jwt_refresh_expire_days: int = 365
+    # Deprecated alias kept for existing env files.
     jwt_expire_minutes: int = 60 * 24 * 7
 
     cors_origins: str = (

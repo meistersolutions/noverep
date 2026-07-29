@@ -23,10 +23,15 @@ export default function AuthPage() {
   });
 
   const finishAuth = async (
-    res: { access_token: string; username: string; is_guest: boolean },
+    res: {
+      access_token: string;
+      refresh_token: string;
+      username: string;
+      is_guest: boolean;
+    },
     displayName?: string,
   ) => {
-    setAuth(res.access_token, res.username, res.is_guest);
+    setAuth(res.access_token, res.refresh_token, res.username, res.is_guest);
     if (displayName) localStorage.setItem('noverep_display_name', displayName);
     navigate('/', { replace: true });
     void init();
