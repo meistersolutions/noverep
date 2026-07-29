@@ -12,6 +12,42 @@ async def client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://localhost",
+        "capacitor://localhost",
+        "http://localhost",
+    ],
+)
+async def test_cors_preflight_capacitor_origins(client, origin):
+    response = await client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_auth_refresh(client):
+    response = await client.options(
+        "/api/v1/auth/refresh",
+        headers={
+            "Origin": "https://localhost",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "https://localhost"
+
+
+@pytest.mark.asyncio
 async def test_health(client):
     response = await client.get("/health")
     assert response.status_code == 200

@@ -1,5 +1,12 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Capacitor WebView origins (Android https scheme, legacy capacitor://, dev http).
+CAPACITOR_ORIGINS: tuple[str, ...] = (
+    "capacitor://localhost",
+    "https://localhost",
+    "http://localhost",
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -50,7 +57,11 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        for origin in CAPACITOR_ORIGINS:
+            if origin not in origins:
+                origins.append(origin)
+        return origins
 
 
 settings = Settings()

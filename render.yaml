@@ -24,7 +24,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://noverep.onrender.com
+        value: https://noverep.onrender.com,capacitor://localhost,https://localhost,http://localhost
       - key: REDIS_URL
         value: redis://localhost:6379/0
       - key: SONGS_LIBRARY_URL
