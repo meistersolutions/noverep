@@ -11,6 +11,7 @@ from app.schemas import (
     DiscoverRequest,
     DiscoverResponse,
     EnrichStatusOut,
+    ComposerOut,
     PlaylistExportRequest,
     PlaylistExportResponse,
     ResolveYoutubeRequest,
@@ -78,6 +79,30 @@ def stats(db: Session = Depends(get_db)):
     )
     by_composer = {(name or "Unknown"): count for name, count in rows}
     return StatsOut(total_songs=total, by_composer=by_composer, mapped=mapped, metadata_only=meta)
+
+
+@router.get("/composers", response_model=list[ComposerOut])
+def list_composers(db: Session = Depends(get_db)):
+    """Composer names with distinct movie/album and song counts."""
+    movie_key = func.nullif(func.trim(Song.movie_name), "")
+    rows = (
+        db.query(
+            Song.composer_name,
+            func.count(Song.id),
+            func.count(func.distinct(movie_key)),
+        )
+        .group_by(Song.composer_name)
+        .order_by(func.count(Song.id).desc(), Song.composer_name)
+        .all()
+    )
+    return [
+        ComposerOut(
+            name=name or "Unknown",
+            song_count=int(song_count),
+            movie_count=int(movie_count),
+        )
+        for name, song_count, movie_count in rows
+    ]
 
 
 @router.get("/songs", response_model=list[SongOut])

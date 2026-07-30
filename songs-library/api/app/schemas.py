@@ -167,6 +167,12 @@ class StatsOut(BaseModel):
     metadata_only: int
 
 
+class ComposerOut(BaseModel):
+    name: str
+    song_count: int
+    movie_count: int
+
+
 class PlaylistExportItem(BaseModel):
     song_id: str
     song_name: str

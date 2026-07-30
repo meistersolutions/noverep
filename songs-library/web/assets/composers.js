@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 
-/** @type {Array<{ name: string, count: number }>} */
+/** @type {Array<{ name: string, song_count: number, movie_count: number }>} */
 let composers = [];
 
 async function api(path) {
@@ -36,11 +36,12 @@ function filteredComposers() {
 function renderComposers() {
   const host = $("composers-list");
   const rows = filteredComposers();
-  const totalSongs = composers.reduce((sum, c) => sum + c.count, 0);
+  const totalSongs = rows.reduce((sum, c) => sum + c.song_count, 0);
+  const totalMovies = rows.reduce((sum, c) => sum + c.movie_count, 0);
   $("composer-summary").textContent =
     `${rows.length} composer${rows.length === 1 ? "" : "s"}` +
     (rows.length !== composers.length ? ` of ${composers.length}` : "") +
-    ` · ${totalSongs.toLocaleString()} songs`;
+    ` · ${totalMovies.toLocaleString()} movies/albums · ${totalSongs.toLocaleString()} songs`;
 
   if (!composers.length) {
     host.innerHTML = `<p class="meta">No composers yet. Discover a seed from the home page.</p>`;
@@ -57,6 +58,7 @@ function renderComposers() {
         <thead>
           <tr>
             <th scope="col">Composer</th>
+            <th scope="col" class="num">Movies / albums</th>
             <th scope="col" class="num">Songs</th>
           </tr>
         </thead>
@@ -68,7 +70,8 @@ function renderComposers() {
               <td>
                 <a class="composer-link" href="${browseUrl(c.name)}">${escapeHtml(c.name)}</a>
               </td>
-              <td class="num">${c.count.toLocaleString()}</td>
+              <td class="num">${c.movie_count.toLocaleString()}</td>
+              <td class="num">${c.song_count.toLocaleString()}</td>
             </tr>`,
             )
             .join("")}
@@ -80,10 +83,14 @@ function renderComposers() {
 
 async function loadComposers() {
   $("status").textContent = "Loading composers…";
-  const stats = await api("/api/stats");
-  composers = Object.entries(stats.by_composer || {})
-    .map(([name, count]) => ({ name, count: Number(count) || 0 }))
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const rows = await api("/api/composers");
+  composers = rows
+    .map((c) => ({
+      name: c.name,
+      song_count: Number(c.song_count) || 0,
+      movie_count: Number(c.movie_count) || 0,
+    }))
+    .sort((a, b) => b.song_count - a.song_count || a.name.localeCompare(b.name));
   $("status").textContent = "";
   renderComposers();
 }
