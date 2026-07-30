@@ -43,6 +43,7 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 
 - `GET /api/health` — health
 - `GET /api/stats` — counts by composer
+- Web UI `/composers` — composer names with song counts
 - `GET /api/songs` — list/filter
 - `POST /api/songs` — manual add
 - `PATCH /api/songs/{id}` — update

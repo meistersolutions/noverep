@@ -60,6 +60,61 @@ h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.6rem); font-weight: 700; }
 }
 .browse-sub { font-size: 0.85rem; }
 
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+.site-nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 0.1rem;
+}
+.site-nav a:hover { color: var(--text); }
+.site-nav a[aria-current="page"] {
+  color: var(--accent);
+  border-bottom-color: rgba(61, 186, 126, 0.55);
+}
+
+.composers-controls {
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.composers-summary {
+  margin: 0;
+  flex: 1 1 auto;
+  text-align: right;
+}
+.composers-list { margin-top: 0.5rem; }
+.composers-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+.composers-table th,
+.composers-table td {
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.composers-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.composers-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.composer-link {
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+}
+.composer-link:hover { color: var(--accent); }
+
 .controls { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.85rem; }
 input, button {
   border-radius: 10px;

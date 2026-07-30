@@ -8,6 +8,8 @@ let browsing = false;
 let allSongs = [];
 /** @type {{ from: number | null, to: number | null }} */
 let yearRange = { from: null, to: null };
+/** Composer filter from /?composer=… (also used when reloading browse). */
+let browseComposer = "";
 
 const COLUMNS = [
   { key: "song_name", label: "Song", get: (s) => s.song_name || "" },
@@ -161,7 +163,7 @@ function commitYearRange({ reload = true } = {}) {
   yearRange = { from: fromResult.value, to: toResult.value };
 
   if (browsing && !unchanged && reload) {
-    loadBrowse().catch((e) => ($("status").textContent = e.message));
+    loadBrowse({ composer: browseComposer }).catch((e) => ($("status").textContent = e.message));
   } else if (browsing) {
     renderFilteredRows();
   }
@@ -317,8 +319,14 @@ async function refreshStats() {
   return stats;
 }
 
-async function loadBrowse() {
-  $("status").textContent = "Loading library…";
+async function loadBrowse(options = {}) {
+  if (Object.prototype.hasOwnProperty.call(options, "composer")) {
+    browseComposer = (options.composer || "").trim();
+  }
+  const composer = browseComposer;
+  $("status").textContent = composer
+    ? `Loading songs for “${composer}”…`
+    : "Loading library…";
   const stats = await api("/api/stats");
   renderBrowseCount(stats.total_songs);
 
@@ -332,6 +340,7 @@ async function loadBrowse() {
     });
     if (yearRange.from != null) params.set("year_from", String(yearRange.from));
     if (yearRange.to != null) params.set("year_to", String(yearRange.to));
+    if (composer) params.set("composer", composer);
     const batch = await api(`/api/songs?${params}`);
     songs.push(...batch);
     if (batch.length < pageSize) break;
@@ -339,6 +348,13 @@ async function loadBrowse() {
     if (offset > 20000) break;
   }
   renderSongs(songs);
+  if (composer) {
+    const input = document.querySelector('.col-filter[data-filter="composer_name"]');
+    if (input) {
+      input.value = composer;
+      renderFilteredRows();
+    }
+  }
 }
 
 async function pollDiscoverJob(jobId) {
@@ -592,8 +608,9 @@ $("browse").addEventListener("click", async () => {
   $("browse").classList.toggle("active", browsing);
   if (browsing) {
     if (!commitYearRange({ reload: false })) return;
-    await loadBrowse().catch((e) => ($("status").textContent = e.message));
+    await loadBrowse({ composer: browseComposer }).catch((e) => ($("status").textContent = e.message));
   } else {
+    browseComposer = "";
     $("list").hidden = true;
     $("list").innerHTML = "";
     allSongs = [];
@@ -610,6 +627,19 @@ refreshJobs()
     }
   })
   .catch((e) => ($("status").textContent = e.message));
+
+(async () => {
+  const composer = new URLSearchParams(window.location.search).get("composer");
+  if (!composer?.trim()) return;
+  browsing = true;
+  $("browse").classList.add("active");
+  if (!commitYearRange({ reload: false })) return;
+  try {
+    await loadBrowse({ composer: composer.trim() });
+  } catch (e) {
+    $("status").textContent = e.message || String(e);
+  }
+})();
 
 function toggleAddPanel(show) {
   const panel = $("add-panel");

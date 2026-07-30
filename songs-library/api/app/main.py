@@ -53,3 +53,7 @@ if WEB_DIR.exists():
     @app.get("/")
     def index():
         return FileResponse(WEB_DIR / "index.html")
+
+    @app.get("/composers")
+    def composers_page():
+        return FileResponse(WEB_DIR / "composers.html")
