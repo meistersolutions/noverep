@@ -92,6 +92,22 @@
 
   <p id="status" class="status"></p>
 
+  <section id="workers-panel" class="jobs-panel workers-panel">
+    <div class="jobs-head">
+      <div>
+        <h2>YouTube mapping</h2>
+        <p class="jobs-hint">Background worker maps video ids + popularity. Free API quota is ~100 searches/day.</p>
+      </div>
+      <div class="workers-actions">
+        <button id="resolve-refresh" type="button" class="ghost">Refresh</button>
+        <button id="resolve-run" type="button" class="accent">Run 20 now</button>
+      </div>
+    </div>
+    <div id="workers-status" class="workers-status">
+      <p class="meta">Loading worker status…</p>
+    </div>
+  </section>
+
   <section id="jobs-panel" class="jobs-panel">
     <div class="jobs-head">
       <h2>Background discovery</h2>

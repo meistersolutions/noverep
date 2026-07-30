@@ -32,6 +32,45 @@ _VIEW_SCORE_LOG_MAX = 9.0
 # Soft circuit-breaker after YouTube blocks (403 / bot checks).
 _consecutive_blocks = 0
 
+# Last background / manual resolve batch (in-process; resets on redeploy).
+_last_resolve: dict = {
+    "at": None,
+    "source": None,
+    "attempted": 0,
+    "resolved": 0,
+    "failed": 0,
+}
+
+
+def get_resolve_status() -> dict:
+    """Snapshot for the Songs Library portal /ops monitoring."""
+    return {
+        "youtube_api_configured": _data_api_configured(),
+        "consecutive_blocks": _consecutive_blocks,
+        "block_cooldown_seconds": youtube_block_cooldown_seconds(),
+        "last_batch": dict(_last_resolve),
+    }
+
+
+def _record_resolve_batch(
+    *,
+    source: str,
+    attempted: int,
+    resolved: int,
+    failed: int,
+) -> None:
+    from datetime import datetime, timezone
+
+    _last_resolve.update(
+        {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "source": source,
+            "attempted": attempted,
+            "resolved": resolved,
+            "failed": failed,
+        }
+    )
+
 
 def popularity_from_view_count(views: int | float | None) -> float | None:
     """Map YouTube view count to a 0–100 popularity score (log scale).
@@ -67,7 +106,11 @@ def build_search_query(song: Song) -> str:
 
 
 def build_search_queries(song: Song) -> list[str]:
-    """Ordered search attempts — broader queries after the full metadata string."""
+    """Ordered search attempts — broader queries after the full metadata string.
+
+    Keep the list short when the Data API key is set: each search costs 100
+    quota units (~100 searches/day on the free tier).
+    """
     queries: list[str] = []
     seen: set[str] = set()
 
@@ -84,9 +127,13 @@ def build_search_queries(song: Song) -> list[str]:
     add(build_search_query(song))
     if song.movie_name:
         add(f"{song.song_name} {song.movie_name}")
-    if song.composer_name:
-        add(f"{song.song_name} {song.composer_name}")
-    add(song.song_name)
+    # Extra composer / title-only attempts only without Data API (yt-dlp path).
+    if not _data_api_configured():
+        if song.composer_name:
+            add(f"{song.song_name} {song.composer_name}")
+        add(song.song_name)
+    elif len(queries) == 1:
+        add(song.song_name)
     return queries
 
 
@@ -457,6 +504,7 @@ async def resolve_unmapped(
     limit: int | None = None,
     composer: str | None = None,
     dry_run: bool = False,
+    source: str = "manual",
 ) -> ResolveYoutubeResult:
     limit = limit or settings.youtube_resolve_limit
     query = db.query(Song).filter(Song.youtube_video_id.is_(None))
@@ -497,6 +545,12 @@ async def resolve_unmapped(
         for song in updated:
             db.refresh(song)
 
+    _record_resolve_batch(
+        source=source,
+        attempted=len(songs),
+        resolved=resolved,
+        failed=failed,
+    )
     return ResolveYoutubeResult(
         attempted=len(songs),
         resolved=resolved,

@@ -311,12 +311,62 @@ button:disabled { opacity: 0.5; cursor: wait; }
   border-radius: 14px;
   background: rgba(26, 34, 30, 0.75);
 }
+.jobs-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
 .jobs-head h2 {
   margin: 0;
   font-size: 1.05rem;
 }
 .jobs-hint {
   margin: 0.3rem 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.workers-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+.workers-status {
+  display: grid;
+  gap: 0.65rem;
+}
+.workers-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.55rem;
+}
+.workers-metric {
+  background: #0f1613;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+}
+.workers-metric span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.workers-metric strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+.workers-hint {
+  margin: 0;
+  color: #e0c37a;
+  font-size: 0.85rem;
+}
+.workers-batch {
+  margin: 0;
   color: var(--muted);
   font-size: 0.85rem;
 }

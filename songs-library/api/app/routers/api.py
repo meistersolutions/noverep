@@ -21,6 +21,7 @@ from app.schemas import (
     SongOut,
     SongUpdate,
     StatsOut,
+    WorkerStatusOut,
 )
 from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
@@ -30,6 +31,7 @@ from app.services.youtube_resolve import (
     resolve_one_song,
     refresh_popularity_from_views,
     _data_api_configured,
+    get_resolve_status,
 )
 
 router = APIRouter(prefix="/api")
@@ -367,6 +369,44 @@ def enrich_status(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/workers/status", response_model=WorkerStatusOut)
+def workers_status(db: Session = Depends(get_db)):
+    """Mapped backlog + last YouTube resolve batch (for the portal)."""
+    total = db.query(func.count(Song.id)).scalar() or 0
+    mapped = db.query(func.count(Song.id)).filter(Song.playability == "mapped").scalar() or 0
+    meta = (
+        db.query(func.count(Song.id)).filter(Song.playability == "metadata_only").scalar()
+        or 0
+    )
+    resolve = get_resolve_status()
+    last = resolve.get("last_batch") or {}
+    pct = round(100.0 * mapped / total, 2) if total else 0.0
+    hint = ""
+    if not resolve.get("youtube_api_configured"):
+        hint = "Set YOUTUBE_API_KEY on this Render service."
+    elif last.get("attempted") and last.get("resolved") == 0 and last.get("failed", 0) > 0:
+        hint = (
+            "Last batch resolved 0 — check Render logs for youtube_data_api_* "
+            "(quotaExceeded / empty search). Free API quota is ~100 searches/day."
+        )
+    elif meta > mapped * 10:
+        hint = (
+            "Unmapped backlog is large. Free YouTube Data API quota (~10k units/day, "
+            "100 per search) limits mapping to roughly ~25–100 songs/day."
+        )
+    return WorkerStatusOut(
+        total_songs=int(total),
+        mapped=int(mapped),
+        metadata_only=int(meta),
+        mapped_pct=pct,
+        youtube_api_configured=bool(resolve.get("youtube_api_configured")),
+        consecutive_blocks=int(resolve.get("consecutive_blocks") or 0),
+        block_cooldown_seconds=float(resolve.get("block_cooldown_seconds") or 0),
+        last_resolve_batch=last if last.get("at") else None,
+        hint=hint,
+    )
+
+
 @router.post("/enrich/run")
 async def enrich_run(
     limit: int = Query(default=25, ge=1, le=100),
@@ -432,7 +472,11 @@ def sample(body: SampleRequest, db: Session = Depends(get_db)):
 @router.post("/resolve/youtube", response_model=ResolveYoutubeResult)
 async def resolve_youtube(body: ResolveYoutubeRequest, db: Session = Depends(get_db)):
     return await resolve_unmapped(
-        db, limit=body.limit, composer=body.composer, dry_run=body.dry_run
+        db,
+        limit=body.limit,
+        composer=body.composer,
+        dry_run=body.dry_run,
+        source="manual",
     )
 
 

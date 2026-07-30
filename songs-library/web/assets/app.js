@@ -561,6 +561,61 @@ async function refreshJobs() {
   return jobs;
 }
 
+function renderWorkersStatus(w) {
+  const host = $("workers-status");
+  if (!host) return;
+  const batch = w.last_resolve_batch;
+  const batchLine = batch?.at
+    ? `Last batch (${batch.source || "?"}): attempted ${batch.attempted}, resolved ${batch.resolved}, failed ${batch.failed} · ${new Date(batch.at).toLocaleString()}`
+    : "No resolve batch recorded yet since last deploy (worker may still be starting).";
+  const apiLabel = w.youtube_api_configured ? "yes" : "no";
+  host.innerHTML = `
+    <div class="workers-metrics">
+      <div class="workers-metric"><span>Mapped</span><strong>${Number(w.mapped).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>Unmapped</span><strong>${Number(w.metadata_only).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>Mapped %</span><strong>${w.mapped_pct}%</strong></div>
+      <div class="workers-metric"><span>API key</span><strong>${apiLabel}</strong></div>
+      <div class="workers-metric"><span>Blocks</span><strong>${w.consecutive_blocks}</strong></div>
+    </div>
+    <p class="workers-batch">${batchLine}</p>
+    ${w.hint ? `<p class="workers-hint">${escapeHtml(w.hint)}</p>` : ""}
+  `;
+}
+
+async function refreshWorkers() {
+  const w = await api("/api/workers/status");
+  renderWorkersStatus(w);
+  return w;
+}
+
+let workersPollTimer = null;
+function startWorkersPolling() {
+  if (workersPollTimer) return;
+  workersPollTimer = setInterval(() => {
+    refreshWorkers().catch(() => {});
+  }, 15000);
+}
+
+async function runResolveBatch() {
+  const btn = $("resolve-run");
+  btn.disabled = true;
+  $("status").textContent = "Running YouTube resolve batch (20)…";
+  try {
+    const result = await api("/api/resolve/youtube", {
+      method: "POST",
+      body: JSON.stringify({ limit: 20 }),
+    });
+    $("status").textContent =
+      `Resolve batch: attempted ${result.attempted}, resolved ${result.resolved}, failed ${result.failed}`;
+    await refreshWorkers();
+    await refreshStats();
+  } catch (err) {
+    $("status").textContent = err.message || String(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 let jobsPollTimer = null;
 function startJobsPolling() {
   if (jobsPollTimer) return;
@@ -670,6 +725,17 @@ $("browse").addEventListener("click", async () => {
 
 bindYearRange();
 refreshStats().catch((e) => ($("status").textContent = e.message));
+refreshWorkers()
+  .then(() => startWorkersPolling())
+  .catch((e) => {
+    if ($("workers-status")) {
+      $("workers-status").innerHTML = `<p class="meta">Could not load worker status: ${escapeHtml(e.message || String(e))}</p>`;
+    }
+  });
+$("resolve-refresh")?.addEventListener("click", () => {
+  refreshWorkers().catch((e) => ($("status").textContent = e.message));
+});
+$("resolve-run")?.addEventListener("click", runResolveBatch);
 refreshJobs()
   .then((jobs) => {
     if (jobs?.some((j) => j.status === "pending" || j.status === "running")) {

@@ -125,6 +125,18 @@ class EnrichStatusOut(BaseModel):
     last_batch: dict | None = None
 
 
+class WorkerStatusOut(BaseModel):
+    total_songs: int
+    mapped: int
+    metadata_only: int
+    mapped_pct: float
+    youtube_api_configured: bool
+    consecutive_blocks: int
+    block_cooldown_seconds: float
+    last_resolve_batch: dict | None = None
+    hint: str = ""
+
+
 class SampleRequest(BaseModel):
     composer: str | None = None
     seed: str | None = None

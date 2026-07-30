@@ -339,6 +339,7 @@ async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
                 db,
                 limit=settings.youtube_resolve_batch_size,
                 dry_run=False,
+                source="background",
             )
             if result.attempted == 0:
                 stats = await refresh_popularity_from_views(
