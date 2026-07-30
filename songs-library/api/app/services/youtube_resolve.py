@@ -66,6 +66,38 @@ def build_search_query(song: Song) -> str:
     return " ".join(p for p in parts if p)
 
 
+def build_search_queries(song: Song) -> list[str]:
+    """Ordered search attempts — broader queries after the full metadata string."""
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        q = " ".join(value.split()).strip()
+        if not q:
+            return
+        key = q.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        queries.append(q)
+
+    add(build_search_query(song))
+    if song.movie_name:
+        add(f"{song.song_name} {song.movie_name}")
+    if song.composer_name:
+        add(f"{song.song_name} {song.composer_name}")
+    add(song.song_name)
+    return queries
+
+
+def _youtube_api_key() -> str:
+    return (settings.youtube_api_key or "").strip()
+
+
+def _data_api_configured() -> bool:
+    return bool(_youtube_api_key())
+
+
 def youtube_block_cooldown_seconds() -> float:
     """Extra sleep after consecutive YouTube blocks."""
     if _consecutive_blocks <= 0:
@@ -163,8 +195,28 @@ def _ydl_opts(*, extract_flat: bool = False) -> dict:
     return opts
 
 
-def _search_via_data_api(query: str) -> tuple[str | None, int | None]:
-    key = (settings.youtube_api_key or "").strip()
+def _data_api_region_params(language: str | None) -> dict[str, str]:
+    """Bias Indian film-music search when we know the song language."""
+    lang = (language or "").strip().casefold()
+    if lang in {"tamil", "tamizh", "ta", "தமிழ்"}:
+        return {"relevanceLanguage": "ta", "regionCode": "IN"}
+    if lang in {"hindi", "hi", "हिंदी", "हिन्दी"}:
+        return {"relevanceLanguage": "hi", "regionCode": "IN"}
+    if lang in {"telugu", "te"}:
+        return {"relevanceLanguage": "te", "regionCode": "IN"}
+    if lang in {"malayalam", "ml"}:
+        return {"relevanceLanguage": "ml", "regionCode": "IN"}
+    if lang in {"kannada", "kn"}:
+        return {"relevanceLanguage": "kn", "regionCode": "IN"}
+    return {"regionCode": "IN"}
+
+
+def _search_via_data_api(
+    query: str,
+    *,
+    language: str | None = None,
+) -> tuple[str | None, int | None]:
+    key = _youtube_api_key()
     if not key:
         return None, None
     try:
@@ -177,13 +229,30 @@ def _search_via_data_api(query: str) -> tuple[str | None, int | None]:
                     "maxResults": 5,
                     "q": query,
                     "key": key,
+                    **_data_api_region_params(language),
                 },
             )
             if resp.status_code in {403, 429}:
-                _note_block(f"data_api_search_{resp.status_code}", query=query)
+                detail = _google_api_error(resp)
+                _note_block(f"data_api_search_{resp.status_code}: {detail}", query=query)
                 return None, None
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                logger.warning(
+                    "youtube_data_api_search_failed",
+                    extra={
+                        "status": resp.status_code,
+                        "error": _google_api_error(resp),
+                        "query": query,
+                    },
+                )
+                return None, None
             items = (resp.json() or {}).get("items") or []
+            if not items:
+                logger.info(
+                    "youtube_data_api_search_empty",
+                    extra={"query": query},
+                )
+                return None, None
             for item in items:
                 vid = ((item.get("id") or {}).get("videoId") or "").strip()
                 if not VIDEO_ID_RE.match(vid):
@@ -202,8 +271,25 @@ def _search_via_data_api(query: str) -> tuple[str | None, int | None]:
     return None, None
 
 
+def _google_api_error(resp: httpx.Response) -> str:
+    try:
+        payload = resp.json()
+        err = (payload or {}).get("error") or {}
+        message = err.get("message") or ""
+        reason = ""
+        errors = err.get("errors") or []
+        if errors and isinstance(errors[0], dict):
+            reason = str(errors[0].get("reason") or "")
+        parts = [p for p in (message, reason) if p]
+        if parts:
+            return " — ".join(parts)
+    except Exception:  # noqa: BLE001
+        pass
+    return (resp.text or "")[:240]
+
+
 def _views_via_data_api(client: httpx.Client, video_id: str) -> int | None:
-    key = (settings.youtube_api_key or "").strip()
+    key = _youtube_api_key()
     if not key:
         return None
     try:
@@ -235,7 +321,7 @@ def _views_via_data_api(client: httpx.Client, video_id: str) -> int | None:
 
 
 def _fetch_view_count_data_api(video_id: str) -> int | None:
-    key = (settings.youtube_api_key or "").strip()
+    key = _youtube_api_key()
     if not key:
         return None
     try:
@@ -245,11 +331,20 @@ def _fetch_view_count_data_api(video_id: str) -> int | None:
         return None
 
 
-def _search_youtube_sync(query: str) -> tuple[str | None, int | None]:
+def _search_youtube_sync(
+    query: str,
+    *,
+    language: str | None = None,
+) -> tuple[str | None, int | None]:
     """Return (video_id, view_count) for the first search hit."""
-    api_hit = _search_via_data_api(query)
+    api_hit = _search_via_data_api(query, language=language)
     if api_hit[0]:
         return api_hit
+
+    # When the Data API key is configured, never fall back to yt-dlp search from
+    # Render/datacenter IPs — it only produces 403 noise and false blocks.
+    if _data_api_configured():
+        return None, None
 
     try:
         import yt_dlp
@@ -280,11 +375,23 @@ def _search_youtube_sync(query: str) -> tuple[str | None, int | None]:
     return None, None
 
 
+def search_youtube_for_song(song: Song) -> tuple[str | None, int | None]:
+    """Try several query shapes via the Data API before giving up."""
+    for query in build_search_queries(song):
+        video_id, views = _search_youtube_sync(query, language=song.language)
+        if video_id:
+            return video_id, views
+    return None, None
+
+
 def _fetch_view_count_sync(video_id: str) -> int | None:
     """Load view_count for a known video id."""
     views = _fetch_view_count_data_api(video_id)
     if views is not None:
         return views
+
+    if _data_api_configured():
+        return None
 
     try:
         import yt_dlp
@@ -335,8 +442,7 @@ async def resolve_one_song(db: Session, song: Song) -> Song | None:
             db.refresh(song)
         return song
 
-    q = build_search_query(song)
-    video_id, views = await asyncio.to_thread(_search_youtube_sync, q)
+    video_id, views = await asyncio.to_thread(search_youtube_for_song, song)
     if not video_id:
         return None
     apply_youtube_stats(song, video_id=video_id, views=views)
@@ -363,8 +469,7 @@ async def resolve_unmapped(
     updated: list[Song] = []
 
     for song in songs:
-        q = build_search_query(song)
-        video_id, views = await asyncio.to_thread(_search_youtube_sync, q)
+        video_id, views = await asyncio.to_thread(search_youtube_for_song, song)
         if not video_id:
             failed += 1
             # Back off within the batch when YouTube is blocking hard.

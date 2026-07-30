@@ -29,6 +29,7 @@ from app.services.youtube_resolve import (
     resolve_unmapped,
     resolve_one_song,
     refresh_popularity_from_views,
+    _data_api_configured,
 )
 
 router = APIRouter(prefix="/api")
@@ -78,7 +79,13 @@ def stats(db: Session = Depends(get_db)):
         .all()
     )
     by_composer = {(name or "Unknown"): count for name, count in rows}
-    return StatsOut(total_songs=total, by_composer=by_composer, mapped=mapped, metadata_only=meta)
+    return StatsOut(
+        total_songs=total,
+        by_composer=by_composer,
+        mapped=mapped,
+        metadata_only=meta,
+        youtube_api_configured=_data_api_configured(),
+    )
 
 
 @router.get("/composers", response_model=list[ComposerOut])

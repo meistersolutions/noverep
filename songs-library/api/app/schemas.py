@@ -165,6 +165,7 @@ class StatsOut(BaseModel):
     by_composer: dict[str, int]
     mapped: int
     metadata_only: int
+    youtube_api_configured: bool = False
 
 
 class ComposerOut(BaseModel):
