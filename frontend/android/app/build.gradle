@@ -20,8 +20,8 @@ android {
         applicationId "com.noverep.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 19
-        versionName "1.6.8"
+        versionCode 20
+        versionName "1.6.9"
         buildConfigField "String", "NOREP_API_HEALTH_URL", "\"https://noverep-api.onrender.com/health\""
         buildConfigField "String", "SONGS_LIBRARY_HEALTH_URL", "\"https://songs-library.onrender.com/health\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
