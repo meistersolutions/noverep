@@ -112,6 +112,16 @@ public class MediaPlaybackService extends Service {
         }
     };
 
+    /** Piggyback on the playback foreground service — no extra notification. */
+    private static final long SERVER_KEEPALIVE_MS = 60_000L;
+    private final Runnable serverKeepaliveTicker = new Runnable() {
+        @Override
+        public void run() {
+            ServerKeepaliveHelper.pingBothAsync();
+            mainHandler.postDelayed(this, SERVER_KEEPALIVE_MS);
+        }
+    };
+
     public static boolean isPlayingNow() {
         return playingFlag.get();
     }
@@ -578,6 +588,17 @@ public class MediaPlaybackService extends Service {
         }
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         nm.notify(NOTIFICATION_ID, notification);
+        startServerKeepalive();
+    }
+
+    private void startServerKeepalive() {
+        mainHandler.removeCallbacks(serverKeepaliveTicker);
+        ServerKeepaliveHelper.pingBothAsync();
+        mainHandler.postDelayed(serverKeepaliveTicker, SERVER_KEEPALIVE_MS);
+    }
+
+    private void stopServerKeepalive() {
+        mainHandler.removeCallbacks(serverKeepaliveTicker);
     }
 
     private Notification buildNotification() {
@@ -650,6 +671,7 @@ public class MediaPlaybackService extends Service {
 
     @Override
     public void onDestroy() {
+        stopServerKeepalive();
         stopPlayback();
         extractExecutor.shutdownNow();
         if (mediaSession != null) {

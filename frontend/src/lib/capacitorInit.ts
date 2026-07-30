@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { SplashScreen } from '@capacitor/splash-screen';
+import { initServerKeepalive } from '@/lib/serverKeepalive';
 
 /** One-time native shell setup (status bar, splash, body class). */
 export async function initCapacitorShell(): Promise<void> {
@@ -22,5 +23,6 @@ export async function initCapacitorShell(): Promise<void> {
     } catch {
       /* optional */
     }
+    void initServerKeepalive();
   }
 }

@@ -166,6 +166,35 @@ Server `/tracks/audio-stream` remains only as a fallback if on-device extraction
 - Web / mobile browser still uses the YouTube iframe (background limits remain there).
 - YouTube ToS still applies; this is for personal sideload use.
 
+---
+
+## Keeping NoRepeat + Songs Library awake (Render free tier)
+
+Render free-tier services sleep after ~15 minutes with no traffic. NoRepeat and Songs Library already ping each other **while both are awake**, but if **both** sleep overnight nothing wakes them until something hits a URL.
+
+### What the Android app does (no extra notification)
+
+| When | Behavior |
+|------|----------|
+| App in **foreground** | JS pings `/health` on NoRepeat + Songs Library every 60s |
+| **Music playing** (foreground media service) | Native code piggybacks the same pings on `MediaPlaybackService` — uses the existing playback notification, not a hidden second service |
+
+This helps when you are actively using the app or listening with the screen off. It does **not** keep servers up 24/7 when the app is fully closed.
+
+### Why not a truly “hidden” Android service?
+
+Since Android 8+, background services are heavily restricted. A **foreground** service must show a persistent notification. WorkManager / periodic jobs are throttled to **≥15 minutes** and are unreliable in Doze. There is no supported way to ping every minute silently while the app is killed.
+
+### For always-on (recommended if you care about overnight discover jobs)
+
+Use a free external cron (e.g. [cron-job.org](https://cron-job.org)) every **5–10 minutes**:
+
+- `https://noverep-api.onrender.com/health`
+- `https://songs-library.onrender.com/health`
+
+That costs no phone battery and is the only reliable 24/7 option on Render free tier.
+
+---
 
 ## Troubleshooting
 
