@@ -2,7 +2,12 @@
 
 Render spins down free web services after ~15 minutes with no *inbound* HTTP.
 In-process discovery/enrich workers die with the container — they do not count
-as activity. NoRepeat (when itself awake) pings Songs Library every minute.
+as activity.
+
+NoRepeat (when itself awake) pings Songs Library every minute. Songs Library
+also pings NoRepeat back when configured. Limitation: if **both** free-tier
+services sleep, neither can wake the other until a user (or external cron)
+hits one of them.
 """
 
 from __future__ import annotations

@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     youtube_cookies: str = ""
     youtube_cookies_b64: str = ""
     youtube_cookies_file: str = ""
+    # Optional: ping NoRepeat so mutual keepalive keeps both free-tier services awake
+    # once either one is woken by a user request.
+    noverep_keepalive_url: str = ""
+    noverep_keepalive_seconds: float = 60.0
     cors_origins: str = "*"
     port: int = 8100
 

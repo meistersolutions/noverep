@@ -49,6 +49,7 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 - `PATCH /api/songs/{id}` — update
 - `POST /api/discover` — Wikidata discovery for seeds
 - `POST /api/discover/jobs/{id}/end` — end a running/pending seed and archive it (hides from home list)
+- `POST /api/discover/jobs/{id}/restart` — re-queue a stuck seed (resume film crawl, or `?reset=true` from scratch)
 - `GET /api/discover/jobs` — list discover jobs (archived hidden by default)
 - `POST /api/sample` — unheard batch for NoRepeat queue
 - `POST /api/resolve/youtube` — resolve YouTube ids for unmapped songs

@@ -67,3 +67,8 @@ services:
         sync: false
       - key: YOUTUBE_COOKIES_B64
         sync: false
+      # Mutual keepalive with NoRepeat (once either service is awake, keep both up).
+      - key: NOREPEAT_KEEPALIVE_URL
+        value: https://noverep-api.onrender.com/health
+      - key: NOREPEAT_KEEPALIVE_SECONDS
+        value: "60"

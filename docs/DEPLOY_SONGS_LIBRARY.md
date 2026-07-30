@@ -84,3 +84,5 @@ Or use the **Discover 3 composers** button on the library homepage.
 - Use **Neon Postgres**, not SQLite on Render — disk is ephemeral and data would vanish on redeploy.
 - Tables are created automatically on startup (`create_all`).
 - Background YouTube mapping uses **YouTube Data API** when `YOUTUBE_API_KEY` is set. Without it, yt-dlp search often fails with **HTTP 403** from Render IPs — set the API key (reuse NoRepeat’s key) on the `songs-library` service.
+- **Keepalive caveat:** NoRepeat pings Songs Library every minute, and Songs Library pings NoRepeat back (`NOREPEAT_KEEPALIVE_URL`). That only works while **at least one** of the two free-tier services is awake. If **both** sleep (no traffic overnight), both stay down until a user hits either URL. For always-on, use a free external cron (e.g. [cron-job.org](https://cron-job.org)) to hit both `/health` endpoints every 5–10 minutes.
+- Jobs left `running` after a sleep are auto-requeued on wake; use **Resume** on the home page if a seed looks stuck.

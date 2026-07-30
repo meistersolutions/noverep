@@ -264,6 +264,26 @@ def end_and_archive_discover_job(
     return job
 
 
+@router.post("/discover/jobs/{job_id}/restart", response_model=DiscoverJobOut)
+def restart_discover_job(
+    job_id: str,
+    reset: bool = Query(
+        default=False,
+        description="If true, clear progress and start from scratch; else resume film crawl.",
+    ),
+    db: Session = Depends(get_db),
+) -> DiscoverJob:
+    """Re-queue a stuck/failed/completed seed so the background worker runs it again."""
+    from app.services.worker import requeue_discover_job
+
+    job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
+    if not job:
+        raise HTTPException(404, "Discover job not found")
+    if job.status == "archived":
+        raise HTTPException(400, "Archived jobs cannot be restarted; discover the seed again")
+    return requeue_discover_job(db, job, reset_progress=reset)
+
+
 @router.get("/discover/jobs", response_model=list[DiscoverJobOut])
 def list_discover_jobs(
     limit: int = Query(default=20, ge=1, le=50),

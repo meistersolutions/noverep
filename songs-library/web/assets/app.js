@@ -441,6 +441,16 @@ function renderJobs(jobs) {
           : "";
       const pages = (job.cursor_json?.wiki_list_pages || []).length;
       const active = job.status === "pending" || job.status === "running";
+      const canResume = job.status !== "archived";
+      const filmIndex = job.cursor_json?.film_index || 0;
+      const resumeLabel =
+        job.status === "running" || job.status === "pending"
+          ? filmIndex > 0
+            ? "Resume"
+            : "Restart"
+          : filmIndex > 0
+            ? "Resume"
+            : "Restart";
       const endLabel = active ? "End & archive" : "Archive";
       return `
         <article class="job-row ${escapeHtml(job.status)}" data-job-id="${escapeHtml(job.id)}">
@@ -456,6 +466,21 @@ function renderJobs(jobs) {
           </div>
           <div class="job-actions">
             <button type="button" class="ghost job-details-btn" data-job-id="${escapeHtml(job.id)}">Details</button>
+            ${
+              canResume
+                ? `<button
+              type="button"
+              class="ghost job-resume-btn"
+              data-job-id="${escapeHtml(job.id)}"
+              data-reset="${filmIndex > 0 ? "0" : "1"}"
+              title="${
+                filmIndex > 0
+                  ? "Re-queue and continue the film crawl from where it left off"
+                  : "Re-queue this seed so the background worker runs it again"
+              }"
+            >${resumeLabel}</button>`
+                : ""
+            }
             <button
               type="button"
               class="ghost danger job-end-btn"
@@ -477,6 +502,31 @@ function renderJobs(jobs) {
         openJobDetails(job);
       } catch (err) {
         $("status").textContent = err.message || String(err);
+      }
+    });
+  });
+
+  host.querySelectorAll(".job-resume-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-job-id");
+      const reset = btn.getAttribute("data-reset") === "1";
+      const confirmMsg = reset
+        ? "Restart this seed from the beginning? Existing songs stay in the library (duplicates are skipped)."
+        : "Resume this seed from the last film checkpoint?";
+      if (!window.confirm(confirmMsg)) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/discover/jobs/${id}/restart?reset=${reset ? "true" : "false"}`, {
+          method: "POST",
+        });
+        $("status").textContent = reset
+          ? "Seed requeued from the beginning."
+          : "Seed resume queued.";
+        startJobsPolling();
+        await refreshJobs();
+      } catch (err) {
+        $("status").textContent = err.message || String(err);
+        btn.disabled = false;
       }
     });
   });
