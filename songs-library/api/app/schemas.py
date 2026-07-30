@@ -135,6 +135,12 @@ class SampleRequest(BaseModel):
     )
     year_from: int | None = None
     year_to: int | None = None
+    popularity_min: float | None = Field(
+        default=None, ge=0, le=100, description="Inclusive lower bound on popularity (0–100)."
+    )
+    popularity_max: float | None = Field(
+        default=None, ge=0, le=100, description="Inclusive upper bound on popularity (0–100)."
+    )
     exclude_hashes: list[str] = Field(default_factory=list)
     exclude_ids: list[str] = Field(default_factory=list)
     only_mapped: bool = False

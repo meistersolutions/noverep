@@ -2,6 +2,11 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronDown, ChevronUp, Filter, Loader2, Plus, RefreshCw, X } from 'lucide-react';
 import { LanguageMultiSelect } from '@/components/LanguageMultiSelect';
 import { DiscoveryYearRangeInput } from '@/components/DiscoveryYearRangeInput';
+import {
+  POPULARITY_MAX,
+  POPULARITY_MIN,
+  PopularityRangeSlider,
+} from '@/components/PopularityRangeSlider';
 import { effectiveLanguages } from '@/lib/languages';
 import { usePlayerStore } from '@/stores/playerStore';
 import { YoutubeDiscoveryToggle, useYoutubeDiscoveryEnabled } from '@/components/YoutubeDiscoveryToggle';
@@ -50,6 +55,8 @@ export function QueueRefreshPanel({
   const [languages, setLanguages] = useState<string[]>([]);
   const [yearFrom, setYearFrom] = useState<number | null>(null);
   const [yearTo, setYearTo] = useState<number | null>(null);
+  const [popularityMin, setPopularityMin] = useState(POPULARITY_MIN);
+  const [popularityMax, setPopularityMax] = useState(POPULARITY_MAX);
   const youtubeDiscovery = useYoutubeDiscoveryEnabled();
   const lastHydratedKey = useRef<string | undefined>(undefined);
 
@@ -68,11 +75,19 @@ export function QueueRefreshPanel({
     if (next.length) onSeedsChange(next);
   }, [activeSeedKey, onSeedsChange]);
 
-  const buildOptions = (): QueueRefreshOptions => ({
-    languages,
-    yearFrom,
-    yearTo,
-  });
+  const buildOptions = (): QueueRefreshOptions => {
+    const options: QueueRefreshOptions = {
+      languages,
+      yearFrom,
+      yearTo,
+    };
+    // Only send when narrowed from the full 1–100 span.
+    if (popularityMin > POPULARITY_MIN || popularityMax < POPULARITY_MAX) {
+      options.popularityMin = popularityMin;
+      options.popularityMax = popularityMax;
+    }
+    return options;
+  };
 
   const addSeed = (raw: string) => {
     const next = normalizeSeedList([...seeds, raw]);
@@ -217,7 +232,12 @@ export function QueueRefreshPanel({
           <Filter className="w-5 h-5 text-accent shrink-0" />
           <div>
             <p className="font-semibold text-sm">Discovery filters</p>
-            <p className="text-xs text-white/50">Languages and year range for queue refresh</p>
+            <p className="text-xs text-white/50">
+              Languages, year, and popularity for queue refresh
+              {popularityMin > POPULARITY_MIN || popularityMax < POPULARITY_MAX
+                ? ` · popularity ${popularityMin}–${popularityMax}`
+                : ''}
+            </p>
           </div>
         </div>
         {open ? (
@@ -243,6 +263,21 @@ export function QueueRefreshPanel({
               onSave={(from, to) => {
                 setYearFrom(from);
                 setYearTo(to);
+              }}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Popularity</p>
+            <p className="text-xs text-white/45">
+              Drag both ends to hear deeper cuts (e.g. 30–50) or only hits (80–100).
+            </p>
+            <PopularityRangeSlider
+              min={popularityMin}
+              max={popularityMax}
+              onChange={(nextMin, nextMax) => {
+                setPopularityMin(nextMin);
+                setPopularityMax(nextMax);
               }}
             />
           </div>

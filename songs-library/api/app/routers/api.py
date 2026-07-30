@@ -343,6 +343,14 @@ def sample(body: SampleRequest, db: Session = Depends(get_db)):
         query = query.filter(
             or_(Song.release_year.is_(None), Song.release_year <= body.year_to)
         )
+    if body.popularity_min is not None and body.popularity_max is not None:
+        lo = min(body.popularity_min, body.popularity_max)
+        hi = max(body.popularity_min, body.popularity_max)
+        query = query.filter(Song.popularity.between(lo, hi))
+    elif body.popularity_min is not None:
+        query = query.filter(Song.popularity >= body.popularity_min)
+    elif body.popularity_max is not None:
+        query = query.filter(Song.popularity <= body.popularity_max)
     if body.only_mapped:
         query = query.filter(Song.youtube_video_id.isnot(None))
     if body.languages:

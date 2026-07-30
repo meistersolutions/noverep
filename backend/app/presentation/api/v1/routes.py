@@ -736,6 +736,12 @@ async def refresh_queue(
     ),
     year_from: int | None = Query(default=None, ge=1900, le=2100),
     year_to: int | None = Query(default=None, ge=1900, le=2100),
+    popularity_min: float | None = Query(
+        default=None, ge=0, le=100, description="Inclusive popularity lower bound (0–100)"
+    ),
+    popularity_max: float | None = Query(
+        default=None, ge=0, le=100, description="Inclusive popularity upper bound (0–100)"
+    ),
     include_heard: bool = Query(
         default=False, description="Include songs heard within memory window"
     ),
@@ -755,12 +761,26 @@ async def refresh_queue(
         )
 
     lang_list = [s.strip() for s in languages.split(",") if s.strip()] if languages else None
-    filters = QueueRefreshFilters(
-        preferred_languages=lang_list,
-        year_from=year_from,
-        year_to=year_to,
-        skip_memory_filter=include_heard,
-    ) if (lang_list or year_from is not None or year_to is not None or include_heard) else None
+    has_filters = bool(
+        lang_list
+        or year_from is not None
+        or year_to is not None
+        or popularity_min is not None
+        or popularity_max is not None
+        or include_heard
+    )
+    filters = (
+        QueueRefreshFilters(
+            preferred_languages=lang_list,
+            year_from=year_from,
+            year_to=year_to,
+            popularity_min=popularity_min,
+            popularity_max=popularity_max,
+            skip_memory_filter=include_heard,
+        )
+        if has_filters
+        else None
+    )
 
     items = await queue_svc.refresh_upcoming(
         session,

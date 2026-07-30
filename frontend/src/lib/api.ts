@@ -76,6 +76,8 @@ export interface QueueRefreshOptions {
   languages?: string[];
   yearFrom?: number | null;
   yearTo?: number | null;
+  popularityMin?: number | null;
+  popularityMax?: number | null;
   includeHeard?: boolean;
 }
 
@@ -369,6 +371,8 @@ export const api = {
     if (options?.languages?.length) params.set('languages', options.languages.join(','));
     if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
     if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
+    if (options?.popularityMin != null) params.set('popularity_min', String(options.popularityMin));
+    if (options?.popularityMax != null) params.set('popularity_max', String(options.popularityMax));
     if (options?.includeHeard) params.set('include_heard', 'true');
     return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' }, 90_000);
   },
@@ -377,6 +381,8 @@ export const api = {
     if (options?.languages?.length) params.set('languages', options.languages.join(','));
     if (options?.yearFrom != null) params.set('year_from', String(options.yearFrom));
     if (options?.yearTo != null) params.set('year_to', String(options.yearTo));
+    if (options?.popularityMin != null) params.set('popularity_min', String(options.popularityMin));
+    if (options?.popularityMax != null) params.set('popularity_max', String(options.popularityMax));
     if (options?.includeHeard) params.set('include_heard', 'true');
     return request<QueueItem[]>(`/queue/refresh?${params}`, { method: 'POST' }, 90_000);
   },
