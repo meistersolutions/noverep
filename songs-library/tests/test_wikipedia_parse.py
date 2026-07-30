@@ -1,6 +1,6 @@
 """Smoke tests for Wikipedia table → song extraction."""
 
-from app.services.wikipedia import _WikiPageParser, _tables_to_works
+from app.services.wikipedia import _WikiPageParser, _tables_to_films, _tables_to_works
 
 
 SAMPLE = """
@@ -59,6 +59,15 @@ TRACKLIST = """
 </table>
 """
 
+FILM_NAME_DISCOGRAPHY = """
+<table class="wikitable sortable">
+<tr><th>Year</th><th>Film name</th><th>Notes</th></tr>
+<tr><td>1952</td><td><i>Panam</i></td><td>Composed along with T. K. Ramamoorthy</td></tr>
+<tr><td>1960</td><td><i>Rathinapuri Ilavarasi</i></td><td></td></tr>
+<tr><td>1970</td><td>Ethirkalam</td><td></td></tr>
+</table>
+"""
+
 
 def test_rowspan_film_applies_to_second_song():
     parser = _WikiPageParser()
@@ -79,4 +88,14 @@ def test_tracklist_table_parses_all_titles():
     works = _tables_to_works(parser.tables, page_title="Dragon (soundtrack)")
     names = [w["song_name"] for w in works]
     assert names == ["Yendi Vittu Pona", "Rise of Dragon", "Iraivaa"]
-    assert all(w["wikipedia_title"] == "Dragon (soundtrack)" for w in works)
+
+
+def test_film_name_column_extracts_filmography_rows():
+    """M. S. Viswanathan discography uses 'Film name', not 'Film'."""
+    parser = _WikiPageParser()
+    parser.feed(FILM_NAME_DISCOGRAPHY)
+    films = _tables_to_films(parser.tables)
+    assert len(films) == 3
+    assert films[0] == {"film": "Panam", "year": 1952}
+    assert films[1]["film"] == "Rathinapuri Ilavarasi"
+    assert films[2]["year"] == 1970

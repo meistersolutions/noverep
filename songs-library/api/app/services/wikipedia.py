@@ -150,6 +150,31 @@ class _WikiPageParser(HTMLParser):
             self.tables.append((self._current_year, grid))
 
 
+def _is_film_column_header(header: str) -> bool:
+    """True for filmography columns like Film, Film name, Movie title."""
+    key = header.casefold().strip()
+    if key in {
+        "film",
+        "films",
+        "movie",
+        "movies",
+        "title",
+        "film name",
+        "movie name",
+        "film title",
+        "movie title",
+        "album",
+        "film / album",
+        "film/album",
+    }:
+        return True
+    if key.endswith(" film") or key.endswith(" movie"):
+        return True
+    if "film name" in key or "movie name" in key:
+        return True
+    return False
+
+
 def _header_index(headers: list[str]) -> dict[str, int]:
     mapping: dict[str, int] = {}
     lower = [h.casefold().strip() for h in headers]
@@ -164,9 +189,11 @@ def _header_index(headers: list[str]) -> dict[str, int]:
         elif key == "title" and not looks_like_filmography and "film" not in lower:
             # Discography "Title" or Template:Track listing "Title" column.
             mapping.setdefault("song", i)
-        elif key in ("film", "movie", "album", "film / album", "film/album"):
+        elif _is_film_column_header(key) and key != "title":
             mapping.setdefault("film", i)
-        elif key in ("year", "release year"):
+        elif key == "title" and looks_like_filmography:
+            mapping.setdefault("film", i)
+        elif key in ("year", "release year", "date"):
             mapping.setdefault("year", i)
         elif "singer" in key or key in ("artist", "performer", "vocalist"):
             mapping.setdefault("singer", i)
@@ -258,9 +285,12 @@ def _tables_to_films(
         film_i = None
         year_i = None
         for i, h in enumerate(headers):
-            if h in ("film", "movie", "title") and film_i is None:
+            if film_i is None and _is_film_column_header(h):
+                # Prefer explicit film/movie columns over a bare "title".
+                if h == "title" and any(_is_film_column_header(x) and x != "title" for x in headers):
+                    continue
                 film_i = i
-            if h in ("year", "date", "release year") and year_i is None:
+            if year_i is None and h in ("year", "date", "release year"):
                 year_i = i
         if film_i is None:
             continue
@@ -268,7 +298,7 @@ def _tables_to_films(
             if film_i >= len(row):
                 continue
             name = row[film_i].strip()
-            if not name or name.casefold() in ("film", "movie", "title"):
+            if not name or name.casefold() in ("film", "movie", "title", "film name", "movie name"):
                 continue
             key = name.casefold()
             if key in seen:
