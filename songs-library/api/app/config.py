@@ -25,7 +25,14 @@ class Settings(BaseSettings):
     youtube_resolve_limit: int = 20
     youtube_resolve_batch_size: int = 10
     youtube_resolve_idle_seconds: float = 30.0
-    youtube_resolve_pause_seconds: float = 3.0
+    youtube_resolve_pause_seconds: float = 5.0
+    # Extra sleep after YouTube 403/bot blocks (multiplied by consecutive failures).
+    youtube_resolve_403_cooldown_seconds: float = 120.0
+    # Prefer official Data API search on Render (yt-dlp often gets 403 there).
+    youtube_api_key: str = ""
+    youtube_cookies: str = ""
+    youtube_cookies_b64: str = ""
+    youtube_cookies_file: str = ""
     cors_origins: str = "*"
     port: int = 8100
 

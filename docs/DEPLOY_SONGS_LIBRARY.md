@@ -41,6 +41,8 @@ Songs Library lives in the `noverep` repo under `songs-library/`. Ensure latest 
 |-----|--------|
 | `DATABASE_URL` | Neon URL from step 1 |
 | `CORS_ORIGINS` | `https://noverep.onrender.com,https://songs-library.onrender.com` |
+| `YOUTUBE_API_KEY` | Same Google YouTube Data API key as NoRepeat (recommended) |
+| `YOUTUBE_COOKIES_B64` | Optional Netscape cookies.txt as base64 (yt-dlp fallback) |
 
 5. Deploy. Public URL will be like: `https://songs-library.onrender.com`
 
@@ -81,3 +83,4 @@ Or use the **Discover 3 composers** button on the library homepage.
 - Free Render services **spin down** after idle; first request may take ~30–60s.
 - Use **Neon Postgres**, not SQLite on Render — disk is ephemeral and data would vanish on redeploy.
 - Tables are created automatically on startup (`create_all`).
+- Background YouTube mapping uses **YouTube Data API** when `YOUTUBE_API_KEY` is set. Without it, yt-dlp search often fails with **HTTP 403** from Render IPs — set the API key (reuse NoRepeat’s key) on the `songs-library` service.

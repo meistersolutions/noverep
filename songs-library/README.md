@@ -51,6 +51,7 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 - `GET /api/discover/jobs` — list discover jobs (archived hidden by default)
 - `POST /api/sample` — unheard batch for NoRepeat queue
 - `POST /api/resolve/youtube` — resolve YouTube ids for unmapped songs
+  (uses `YOUTUBE_API_KEY` when set; yt-dlp fallback often 403s on Render)
 - `POST /api/playlists/export` — export mapped songs as a YouTube playlist payload
 
 ## NoRepeat

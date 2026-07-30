@@ -242,6 +242,8 @@ async def enrich_loop(stop_event: asyncio.Event) -> None:
 
 async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
     """Background: map unmapped songs, then refresh popularity from YouTube views."""
+    from app.services.youtube_resolve import youtube_block_cooldown_seconds
+
     while not stop_event.is_set():
         db = SessionLocal()
         try:
@@ -261,7 +263,11 @@ async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
                 else:
                     await asyncio.sleep(settings.youtube_resolve_pause_seconds)
             else:
-                await asyncio.sleep(settings.youtube_resolve_pause_seconds)
+                pause = settings.youtube_resolve_pause_seconds
+                # If the whole batch failed, YouTube is likely blocking this host.
+                if result.resolved == 0 and result.failed > 0:
+                    pause = max(pause, youtube_block_cooldown_seconds())
+                await asyncio.sleep(pause)
         except Exception:  # noqa: BLE001
             await asyncio.sleep(5)
         finally:
