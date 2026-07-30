@@ -147,7 +147,10 @@ async def resolve_song_youtube(song_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Song not found")
     resolved = await resolve_one_song(db, song)
     if not resolved or not resolved.youtube_video_id:
-        raise HTTPException(404, "Could not resolve YouTube video for this song")
+        raise HTTPException(
+            422,
+            "Could not resolve YouTube video for this song",
+        )
     return resolved
 
 

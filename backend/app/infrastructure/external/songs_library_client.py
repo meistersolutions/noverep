@@ -90,7 +90,7 @@ class SongsLibraryClient:
         *,
         json: dict | None = None,
         timeout: float | None = None,
-        accept_404: bool = False,
+        accept_statuses: frozenset[int] | None = None,
     ) -> httpx.Response | None:
         """HTTP call with retries for Render cold-start 502/503."""
         url = f"{self.base_url}{path}"
@@ -105,7 +105,7 @@ class SongsLibraryClient:
                         except Exception:  # noqa: BLE001
                             pass
                     resp = await client.request(method, url, json=json)
-                if accept_404 and resp.status_code == 404:
+                if accept_statuses and resp.status_code in accept_statuses:
                     return resp
                 if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES - 1:
                     await asyncio.sleep(1.5 * (attempt + 1))
@@ -188,9 +188,9 @@ class SongsLibraryClient:
                 "POST",
                 f"/api/songs/{song_id}/resolve-youtube",
                 timeout=60.0,
-                accept_404=True,
+                accept_statuses=frozenset({404, 422}),
             )
-            if not resp or resp.status_code == 404:
+            if not resp or resp.status_code in {404, 422}:
                 return None
             return LibrarySong.from_dict(resp.json())
         except Exception as exc:  # noqa: BLE001

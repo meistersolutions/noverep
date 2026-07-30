@@ -11,7 +11,7 @@ SONGS_LIBRARY_ENABLED=true
 
 1. Queue refresh / sync samples `POST /api/sample` for active seeds (composer match), preferring `only_mapped=true`.
 2. When the unheard pool drops below 30 tracks, NoRepeat queues `POST /api/discover` (continuous background ingest).
-3. Every library track enters the NoRepeat queue **only after** it has a `youtube_video_id`. Mapped songs enqueue immediately; unmapped songs are batch-resolved via `POST /api/songs/{id}/resolve-youtube` (parallel, capped concurrency) before enqueue. Songs that fail resolve are **skipped** (never left with an empty video id).
+3. Every library track enters the NoRepeat queue **only after** it has a `youtube_video_id`. Mapped songs enqueue immediately; unmapped songs are batch-resolved via `POST /api/songs/{id}/resolve-youtube` (parallel, capped concurrency) before enqueue. Returns **404** if the song id is unknown, **422** if YouTube lookup failed. Songs that fail resolve are **skipped** (never left with an empty video id).
 4. Background workers in Songs Library continuously enrich metadata, resolve YouTube ids, and crawl Wikipedia/Wikidata.
 
 ## Endless seed queue
