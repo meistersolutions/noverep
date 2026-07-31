@@ -121,3 +121,28 @@ def test_person_page_discography_yes_no_songs_column():
     assert names == ["Attakathi", "Pizza", "Jigarthanda"]
     assert all(f["film"] != "Nenu Meeku Telusa?" for f in films)
     assert films[0]["year"] == 2012
+
+
+FILMOGRAPHY_STYLE = """
+<table class="wikitable sortable">
+<tr><th>Year</th><th>Film</th><th>Role</th><th>Notes</th></tr>
+<tr><td>2012</td><td><i>Attakathi</i></td><td>Composer</td><td></td></tr>
+<tr><td>2014</td><td><i>Jigarthanda</i></td><td>Composer</td><td></td></tr>
+</table>
+"""
+
+
+def test_filmography_table_extracts_films():
+    parser = _WikiPageParser()
+    parser.feed(FILMOGRAPHY_STYLE)
+    films = _tables_to_films(parser.tables)
+    assert [f["film"] for f in films] == ["Attakathi", "Jigarthanda"]
+
+
+def test_is_film_hub_title_includes_filmography():
+    from app.services.wikipedia import _is_film_hub_title
+
+    assert _is_film_hub_title("Santhosh Narayanan discography")
+    assert _is_film_hub_title("Kamal Haasan filmography")
+    assert _is_film_hub_title("List of film scores by A. R. Rahman")
+    assert not _is_film_hub_title("Santhosh Narayanan")

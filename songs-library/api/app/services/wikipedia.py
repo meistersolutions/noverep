@@ -379,12 +379,24 @@ async def _page_exists(client: httpx.AsyncClient, title: str) -> str | None:
     return None
 
 
+def _is_film_hub_title(title: str) -> bool:
+    """True for discography / filmography / film-score hub pages."""
+    low = title.casefold()
+    return (
+        "discography" in low
+        or "filmography" in low
+        or "film score" in low
+        or "film scores" in low
+    )
+
+
 async def _resolve_song_list_pages(client: httpx.AsyncClient, label: str) -> list[str]:
     candidates = [
         f"List of songs recorded by {label}",
         f"List of songs composed by {label}",
         f"{label} discography",
         f"{label} filmography",
+        f"List of film scores by {label}",
     ]
     found: list[str] = []
     for title in candidates:
@@ -392,7 +404,12 @@ async def _resolve_song_list_pages(client: httpx.AsyncClient, label: str) -> lis
         if resolved and resolved not in found:
             found.append(resolved)
 
-    for query in (f"{label} songs", f"List of film scores by {label}"):
+    for query in (
+        f"{label} songs",
+        f"{label} discography",
+        f"{label} filmography",
+        f"List of film scores by {label}",
+    ):
         data = await _wiki_get(
             client,
             {
@@ -411,7 +428,14 @@ async def _resolve_song_list_pages(client: httpx.AsyncClient, label: str) -> lis
                 continue
             if any(
                 token in low
-                for token in ("song", "discography", "soundtrack", "film scores", "film score")
+                for token in (
+                    "song",
+                    "discography",
+                    "filmography",
+                    "soundtrack",
+                    "film scores",
+                    "film score",
+                )
             ):
                 if t not in found:
                     found.append(t)
@@ -471,7 +495,7 @@ async def _parse_page_works(
             if limit and len(works) >= limit:
                 return works[:limit]
 
-    if depth < 1 and "discography" in page_title.casefold() and len(works) < 10:
+    if depth < 1 and _is_film_hub_title(page_title) and len(works) < 10:
         for link in _extract_main_article_links(html):
             if link == page_title:
                 continue
@@ -487,26 +511,25 @@ async def _parse_page_works(
 async def list_composer_films(
     label: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Collect film titles from discography / film-score / person pages.
+    """Collect film titles from discography / filmography / film-score / person pages.
 
-    Prefer dedicated pages (``X discography``, filmography, film scores).
+    Prefer dedicated hubs (``X discography``, ``X filmography``, film scores).
     If those are missing — or yield no film rows — parse the person's main
-    Wikipedia article (common for composers/directors/actors whose discography
-    lives under a ``== Discography ==`` / ``== Filmography ==`` section).
+    Wikipedia article (``== Discography ==`` / ``== Filmography ==`` sections).
     """
     async with httpx.AsyncClient(timeout=90.0, headers=_headers()) as client:
         pages = await _resolve_song_list_pages(client, label)
-        dedicated = [
-            p
-            for p in pages
-            if "discography" in p.casefold()
-            or "film score" in p.casefold()
-            or "filmography" in p.casefold()
-        ]
+        dedicated = [p for p in pages if _is_film_hub_title(p)]
+        # Always try both naming conventions when they exist (not only opensearch hits).
+        for suffix in ("discography", "filmography"):
+            resolved = await _page_exists(client, f"{label} {suffix}")
+            if resolved and resolved not in dedicated:
+                dedicated.append(resolved)
+
         person_page = await _page_exists(client, label)
 
         seed_pages: list[str] = list(dedicated)
-        # Do not invent a missing "X discography" title — that 404s and yields 0 films.
+        # Do not invent missing hub titles — that 404s and yields 0 films.
         if not seed_pages and person_page:
             seed_pages = [person_page]
 
@@ -524,28 +547,24 @@ async def list_composer_films(
                 continue
             films.extend(_tables_to_films(tables))
             for link in _extract_main_article_links(html):
-                low = link.casefold()
-                if "film score" in low or "discography" in low or "filmography" in low:
-                    if link not in seen_pages:
-                        queue.append(link)
+                if _is_film_hub_title(link) and link not in seen_pages:
+                    queue.append(link)
             await asyncio.sleep(0.2)
 
-        # Dedicated pages empty / missing → fall back to the main person article.
+        # Dedicated hubs empty / missing → fall back to the main person article.
         if not films and person_page and person_page not in seen_pages:
             try:
                 _page_title, html, tables = await _parse_page_html(client, person_page)
                 films.extend(_tables_to_films(tables))
                 seen_pages.add(person_page)
                 for link in _extract_main_article_links(html):
-                    low = link.casefold()
-                    if "film score" in low or "discography" in low or "filmography" in low:
-                        if link not in seen_pages:
-                            try:
-                                _, _, more_tables = await _parse_page_html(client, link)
-                                films.extend(_tables_to_films(more_tables))
-                                seen_pages.add(link)
-                            except Exception:  # noqa: BLE001
-                                pass
+                    if _is_film_hub_title(link) and link not in seen_pages:
+                        try:
+                            _, _, more_tables = await _parse_page_html(client, link)
+                            films.extend(_tables_to_films(more_tables))
+                            seen_pages.add(link)
+                        except Exception:  # noqa: BLE001
+                            pass
             except Exception:  # noqa: BLE001
                 pass
 
@@ -705,6 +724,7 @@ async def fetch_composer_songs_detailed(
             key=lambda t: (
                 0 if "list of songs" in t.casefold() else 1,
                 0 if "discography" in t.casefold() else 1,
+                0 if "filmography" in t.casefold() else 1,
                 t,
             )
         )
