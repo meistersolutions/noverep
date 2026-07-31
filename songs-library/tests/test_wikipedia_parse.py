@@ -99,3 +99,25 @@ def test_film_name_column_extracts_filmography_rows():
     assert films[0] == {"film": "Panam", "year": 1952}
     assert films[1]["film"] == "Rathinapuri Ilavarasi"
     assert films[2]["year"] == 1970
+
+
+SANTHOSH_STYLE = """
+<table class="wikitable sortable">
+<tr><th>Year</th><th>Film</th><th>Songs</th><th>Score</th><th>Language</th><th>Notes</th></tr>
+<tr><td>2012</td><td><i>Attakathi</i></td><td>Yes</td><td>Yes</td><td>Tamil</td><td></td></tr>
+<tr><td>2012</td><td><i>Pizza</i></td><td>Yes</td><td>Yes</td><td>Tamil</td><td></td></tr>
+<tr><td>2008</td><td><i>Nenu Meeku Telusa?</i></td><td>No</td><td>Yes</td><td>Telugu</td><td>Score only</td></tr>
+<tr><td>2014</td><td><i>Jigarthanda</i></td><td>Yes</td><td>Yes</td><td>Tamil</td><td></td></tr>
+</table>
+"""
+
+
+def test_person_page_discography_yes_no_songs_column():
+    """Composer/director pages often list films with Songs=Yes/No, not titles."""
+    parser = _WikiPageParser()
+    parser.feed(SANTHOSH_STYLE)
+    films = _tables_to_films(parser.tables)
+    names = [f["film"] for f in films]
+    assert names == ["Attakathi", "Pizza", "Jigarthanda"]
+    assert all(f["film"] != "Nenu Meeku Telusa?" for f in films)
+    assert films[0]["year"] == 2012

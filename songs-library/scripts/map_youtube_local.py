@@ -4,6 +4,10 @@
 Runs on your home machine (residential IP) so Google web search is more likely
 to work than from Render. Default is dry-run — nothing is written until --apply.
 
+Search query is always: song_name + movie_name + composer_name.
+By default only songs that already have movie_name are processed (many
+MusicBrainz/Wikidata rows have movie_name=null in /api/songs).
+
 Examples:
   # Resolve 50 unmapped Ilaiyaraaja songs (preview only)
   python map_youtube_local.py --composer Ilaiyaraaja --limit 50
@@ -36,14 +40,16 @@ from pathlib import Path
 
 VIDEO_ID_RE = re.compile(r"(?:v=|/shorts/|youtu\.be/)([A-Za-z0-9_-]{11})")
 WATCH_RE = re.compile(
-    r"https?://(?:www\.)?(?:youtube\.com/watch\?[^\"'<>\s]*v=|youtu\.be/)([A-Za-z0-9_-]{11})",
+    r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?(?:[^\"'<>\s]*&)?v=|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})",
     re.I,
 )
 # Google often wraps links as /url?q=https://www.youtube.com/watch%3Fv%3D...
 GOOGLE_URL_RE = re.compile(
-    r"/url\?q=(https?://(?:www\.)?(?:youtube\.com/watch[^&\"'<>\s]+|youtu\.be/[^&\"'<>\s]+))",
+    r"/url\?q=(https?://(?:www\.)?(?:youtube\.com/(?:watch[^&\"'<>\s]*|shorts/[^&\"'<>\s]+)|youtu\.be/[^&\"'<>\s]+))",
     re.I,
 )
+# Reject ids that look like hex hashes (common false positives in Google HTML/CSS).
+HEXISH_RE = re.compile(r"^[0-9a-f]{11}$", re.I)
 
 DEFAULT_BASE = "https://songs-library.onrender.com"
 UA = (
@@ -94,12 +100,21 @@ def fetch_unmapped(
     *,
     composer: str | None,
     limit: int,
+    require_movie: bool = True,
 ) -> list[dict]:
-    """Page through /api/songs and keep rows without youtube_video_id."""
-    out: list[dict] = []
+    """Page through /api/songs and keep rows without youtube_video_id.
+
+    Prefer songs that already have movie_name (needed for accurate search).
+    API always returns movie_name — it is often null for MusicBrainz/Wikidata rows.
+    """
+    with_movie: list[dict] = []
+    without_movie: list[dict] = []
     offset = 0
     page = 200
-    while len(out) < limit:
+    # Scan enough pages to fill the limit with movie-backed rows when possible.
+    max_scan = max(limit * 20, 2000)
+    scanned = 0
+    while scanned < max_scan and len(with_movie) < limit:
         params: dict[str, str] = {"limit": str(page), "offset": str(offset)}
         if composer:
             params["composer"] = composer
@@ -108,16 +123,34 @@ def fetch_unmapped(
         if not batch:
             break
         for song in batch:
+            scanned += 1
             if song.get("youtube_video_id"):
                 continue
-            out.append(song)
-            if len(out) >= limit:
+            if (song.get("movie_name") or "").strip():
+                with_movie.append(song)
+            else:
+                without_movie.append(song)
+            if len(with_movie) >= limit:
                 break
         if len(batch) < page:
             break
         offset += page
         time.sleep(0.15)
-    return out[:limit]
+
+    if require_movie:
+        if len(with_movie) < limit:
+            print(
+                f"Note: only {len(with_movie)} unmapped songs have movie_name "
+                f"(scanned {scanned}; {len(without_movie)} lack movie). "
+                f"Use --allow-missing-movie to include those."
+            )
+        return with_movie[:limit]
+
+    # Fill remainder with no-movie rows only if explicitly allowed.
+    out = with_movie[:limit]
+    if len(out) < limit:
+        out.extend(without_movie[: limit - len(out)])
+    return out
 
 
 def build_query(song: dict) -> str:
@@ -143,17 +176,26 @@ def build_queries(song: dict, *, method: str) -> list[str]:
     return queries
 
 
+def _looks_like_real_video_id(vid: str) -> bool:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+        return False
+    # Pure hex strings are usually Google HTML/CSS tokens, not YouTube ids.
+    if HEXISH_RE.fullmatch(vid):
+        return False
+    return True
+
+
 def extract_first_video_id(html: str) -> str | None:
+    """Only accept ids from real youtube.com / youtu.be URLs — never bare 11-char tokens."""
     for m in GOOGLE_URL_RE.finditer(html):
         decoded = urllib.parse.unquote(m.group(1))
-        vid = VIDEO_ID_RE.search(decoded)
-        if vid:
-            return vid.group(1)
+        vid_m = VIDEO_ID_RE.search(decoded)
+        if vid_m and _looks_like_real_video_id(vid_m.group(1)):
+            return vid_m.group(1)
     for m in WATCH_RE.finditer(html):
-        return m.group(1)
-    # Last resort: any 11-char id next to youtube watch markers in the page.
-    for m in VIDEO_ID_RE.finditer(html):
-        return m.group(1)
+        vid = m.group(1)
+        if _looks_like_real_video_id(vid):
+            return vid
     return None
 
 
@@ -223,6 +265,11 @@ def main() -> int:
     parser.add_argument("--composer", default=None, help="Filter by composer name")
     parser.add_argument("--limit", type=int, default=50, help="Max unmapped songs to process")
     parser.add_argument(
+        "--allow-missing-movie",
+        action="store_true",
+        help="Include songs with null movie_name (search becomes song+composer only — less accurate)",
+    )
+    parser.add_argument(
         "--method",
         choices=("google", "youtube_api"),
         default="google",
@@ -247,12 +294,22 @@ def main() -> int:
 
     print(f"Library: {args.base}")
     print(f"Fetching up to {args.limit} unmapped songs…")
-    songs = fetch_unmapped(args.base, composer=args.composer, limit=args.limit)
+    songs = fetch_unmapped(
+        args.base,
+        composer=args.composer,
+        limit=args.limit,
+        require_movie=not args.allow_missing_movie,
+    )
     print(f"Got {len(songs)} unmapped")
+    with_m = sum(1 for s in songs if (s.get("movie_name") or "").strip())
+    print(f"  of which {with_m} have movie_name")
 
     if args.dry_fetch_only:
         for s in songs[:20]:
-            print(f"  - {s.get('song_name')} / {s.get('movie_name')} [{s.get('id')}]")
+            print(
+                f"  - {s.get('song_name')} / {s.get('movie_name') or '—'} / "
+                f"{s.get('composer_name') or '—'} [{s.get('id')}]"
+            )
         if len(songs) > 20:
             print(f"  … and {len(songs) - 20} more")
         return 0
@@ -268,11 +325,18 @@ def main() -> int:
         for i, song in enumerate(songs, 1):
             sid = song["id"]
             existing = by_id.get(sid)
-            if existing and existing.get("youtube_video_id"):
+            if existing and existing.get("youtube_video_id") and _looks_like_real_video_id(
+                existing["youtube_video_id"]
+            ):
                 skipped += 1
                 video_id = existing["youtube_video_id"]
                 print(f"[{i}/{len(songs)}] skip (cached) {song.get('song_name')} → {video_id}")
             else:
+                if existing and existing.get("youtube_video_id"):
+                    print(
+                        f"[{i}/{len(songs)}] ignoring bad cached id "
+                        f"{existing.get('youtube_video_id')} for {song.get('song_name')}"
+                    )
                 queries = build_queries(song, method=args.method)
                 if not queries:
                     print(f"[{i}/{len(songs)}] skip (empty name)")
@@ -340,7 +404,7 @@ def main() -> int:
                 time.sleep(args.delay + random.uniform(0, args.jitter))
 
             video_id = (by_id.get(sid) or {}).get("youtube_video_id")
-            if args.apply and video_id:
+            if args.apply and video_id and _looks_like_real_video_id(video_id):
                 try:
                     patch_song(args.base, sid, video_id)
                     applied += 1

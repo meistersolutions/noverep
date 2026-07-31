@@ -273,17 +273,29 @@ def _tables_to_works(
 def _tables_to_films(
     tables: list[tuple[int | None, list[list[str]]]],
 ) -> list[dict[str, Any]]:
-    """Extract film titles from filmography / film-score tables."""
+    """Extract film titles from filmography / film-score tables.
+
+    Handles person-page discography tables like:
+    ``Year | Film | Songs | Score | Language | Notes`` where Songs is Yes/No
+    (not song titles). When that Yes/No column exists, prefer rows marked Yes
+    so score-only credits are skipped.
+    """
     films: list[dict[str, Any]] = []
     seen: set[str] = set()
     for default_year, grid in tables:
         if len(grid) < 2:
             continue
         headers = [c.casefold().strip() for c in grid[0]]
-        if any(h in ("song", "track") for h in headers):
+        # Skip true track-list tables (song title column), but allow a Yes/No
+        # "Songs" flag column used on composer/director discography tables.
+        if "track" in headers:
+            continue
+        if "song" in headers and "film" not in headers and "movie" not in headers:
+            # Likely a song list without films.
             continue
         film_i = None
         year_i = None
+        songs_flag_i = None
         for i, h in enumerate(headers):
             if film_i is None and _is_film_column_header(h):
                 # Prefer explicit film/movie columns over a bare "title".
@@ -292,14 +304,34 @@ def _tables_to_films(
                 film_i = i
             if year_i is None and h in ("year", "date", "release year"):
                 year_i = i
+            if songs_flag_i is None and h in ("songs", "song"):
+                songs_flag_i = i
         if film_i is None:
             continue
+
+        # Detect Yes/No "Songs" column (composer discography), vs song titles.
+        yes_no_flag = False
+        if songs_flag_i is not None:
+            samples = []
+            for row in grid[1:8]:
+                if songs_flag_i < len(row) and row[songs_flag_i].strip():
+                    samples.append(row[songs_flag_i].strip().casefold())
+            if samples and all(s in {"yes", "no", "y", "n"} for s in samples):
+                yes_no_flag = True
+            elif "song" in headers and not yes_no_flag:
+                # Real song-title column on a mixed table — leave to _tables_to_works.
+                continue
+
         for row in grid[1:]:
             if film_i >= len(row):
                 continue
             name = row[film_i].strip()
             if not name or name.casefold() in ("film", "movie", "title", "film name", "movie name"):
                 continue
+            if yes_no_flag and songs_flag_i is not None and songs_flag_i < len(row):
+                flag = row[songs_flag_i].strip().casefold()
+                if flag in {"no", "n"}:
+                    continue
             key = name.casefold()
             if key in seen:
                 continue
@@ -455,20 +487,28 @@ async def _parse_page_works(
 async def list_composer_films(
     label: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Collect film titles from discography / film-score decade pages.
+    """Collect film titles from discography / film-score / person pages.
 
-    Returns (films, wikipedia_pages_visited).
+    Prefer dedicated pages (``X discography``, filmography, film scores).
+    If those are missing — or yield no film rows — parse the person's main
+    Wikipedia article (common for composers/directors/actors whose discography
+    lives under a ``== Discography ==`` / ``== Filmography ==`` section).
     """
     async with httpx.AsyncClient(timeout=90.0, headers=_headers()) as client:
         pages = await _resolve_song_list_pages(client, label)
-        pages = [
+        dedicated = [
             p
             for p in pages
             if "discography" in p.casefold()
             or "film score" in p.casefold()
             or "filmography" in p.casefold()
         ]
-        seed_pages = list(pages) or [f"{label} discography"]
+        person_page = await _page_exists(client, label)
+
+        seed_pages: list[str] = list(dedicated)
+        # Do not invent a missing "X discography" title — that 404s and yields 0 films.
+        if not seed_pages and person_page:
+            seed_pages = [person_page]
 
         films: list[dict[str, Any]] = []
         seen_pages: set[str] = set()
@@ -479,7 +519,7 @@ async def list_composer_films(
                 continue
             seen_pages.add(title)
             try:
-                page_title, html, tables = await _parse_page_html(client, title)
+                _page_title, html, tables = await _parse_page_html(client, title)
             except Exception:  # noqa: BLE001
                 continue
             films.extend(_tables_to_films(tables))
@@ -489,6 +529,25 @@ async def list_composer_films(
                     if link not in seen_pages:
                         queue.append(link)
             await asyncio.sleep(0.2)
+
+        # Dedicated pages empty / missing → fall back to the main person article.
+        if not films and person_page and person_page not in seen_pages:
+            try:
+                _page_title, html, tables = await _parse_page_html(client, person_page)
+                films.extend(_tables_to_films(tables))
+                seen_pages.add(person_page)
+                for link in _extract_main_article_links(html):
+                    low = link.casefold()
+                    if "film score" in low or "discography" in low or "filmography" in low:
+                        if link not in seen_pages:
+                            try:
+                                _, _, more_tables = await _parse_page_html(client, link)
+                                films.extend(_tables_to_films(more_tables))
+                                seen_pages.add(link)
+                            except Exception:  # noqa: BLE001
+                                pass
+            except Exception:  # noqa: BLE001
+                pass
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
