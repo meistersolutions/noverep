@@ -121,13 +121,26 @@ def fetch_unmapped(
 
 
 def build_query(song: dict) -> str:
-    parts = [song.get("song_name") or ""]
-    if song.get("movie_name"):
-        parts.append(song["movie_name"])
-    if song.get("composer_name"):
-        parts.append(song["composer_name"])
-    parts.append("site:youtube.com")
+    """Search as: song name + movie name + composer name."""
+    parts = [
+        (song.get("song_name") or "").strip(),
+        (song.get("movie_name") or "").strip(),
+        (song.get("composer_name") or "").strip(),
+    ]
     return " ".join(p for p in parts if p)
+
+
+def build_queries(song: dict, *, method: str) -> list[str]:
+    """Primary query is song+movie+composer; Google also tries site:youtube.com."""
+    base = build_query(song)
+    if not base:
+        return []
+    queries = [base]
+    if method == "google":
+        site_q = f"{base} site:youtube.com"
+        if site_q not in queries:
+            queries.append(site_q)
+    return queries
 
 
 def extract_first_video_id(html: str) -> str | None:
@@ -260,13 +273,26 @@ def main() -> int:
                 video_id = existing["youtube_video_id"]
                 print(f"[{i}/{len(songs)}] skip (cached) {song.get('song_name')} → {video_id}")
             else:
-                query = build_query(song)
-                print(f"[{i}/{len(songs)}] search: {query}")
+                queries = build_queries(song, method=args.method)
+                if not queries:
+                    print(f"[{i}/{len(songs)}] skip (empty name)")
+                    failed += 1
+                    continue
+
+                video_id = None
+                used_query = queries[0]
                 try:
-                    if args.method == "youtube_api":
-                        video_id = search_youtube_data_api(query.replace(" site:youtube.com", ""), api_key)
-                    else:
-                        video_id = search_google_udm14(query)
+                    for query in queries:
+                        used_query = query
+                        print(f"[{i}/{len(songs)}] search: {query}")
+                        if args.method == "youtube_api":
+                            video_id = search_youtube_data_api(query, api_key)
+                        else:
+                            video_id = search_google_udm14(query)
+                        if video_id:
+                            break
+                        if query != queries[-1]:
+                            time.sleep(0.4)
                 except Exception as exc:
                     print(f"  ERROR: {exc}")
                     failed += 1
@@ -275,7 +301,7 @@ def main() -> int:
                         "song_name": song.get("song_name"),
                         "movie_name": song.get("movie_name"),
                         "composer_name": song.get("composer_name"),
-                        "query": query,
+                        "query": used_query,
                         "youtube_video_id": None,
                         "error": str(exc),
                     }
@@ -294,7 +320,7 @@ def main() -> int:
                         "song_name": song.get("song_name"),
                         "movie_name": song.get("movie_name"),
                         "composer_name": song.get("composer_name"),
-                        "query": query,
+                        "query": used_query,
                         "youtube_video_id": None,
                         "error": "not_found",
                     }
@@ -306,7 +332,7 @@ def main() -> int:
                         "song_name": song.get("song_name"),
                         "movie_name": song.get("movie_name"),
                         "composer_name": song.get("composer_name"),
-                        "query": query,
+                        "query": used_query,
                         "youtube_video_id": video_id,
                         "error": None,
                     }
