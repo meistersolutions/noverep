@@ -201,7 +201,9 @@ def _header_index(headers: list[str]) -> dict[str, int]:
             mapping.setdefault("lyricist", i)
         elif key == "language":
             mapping.setdefault("language", i)
-        elif "composer" in key:
+        elif "composer" in key or key in ("music", "music by"):
+            mapping.setdefault("composer", i)
+        elif key.startswith("music"):
             mapping.setdefault("composer", i)
     return mapping
 
@@ -227,6 +229,7 @@ def _tables_to_works(
         singer_i = idx.get("singer")
         lyric_i = idx.get("lyricist")
         language_i = idx.get("language")
+        composer_i = idx.get("composer")
 
         for row in grid[1:]:
             if song_i >= len(row):
@@ -251,6 +254,11 @@ def _tables_to_works(
             lyricists: list[str] = []
             if lyric_i is not None and lyric_i < len(row) and row[lyric_i].strip():
                 lyricists = [s.strip() for s in re.split(r"[,;/&]| and ", row[lyric_i]) if s.strip()]
+            composer = None
+            if composer_i is not None and composer_i < len(row) and row[composer_i].strip():
+                # First name only when cell lists multiple composers.
+                raw_c = row[composer_i].strip()
+                composer = re.split(r"[,;/&]| and ", raw_c)[0].strip() or None
             language = None
             if language_i is not None and language_i < len(row) and row[language_i].strip():
                 language = row[language_i].strip()
@@ -260,6 +268,7 @@ def _tables_to_works(
                     "song_name": song,
                     "movie_name": film or None,
                     "release_year": year,
+                    "composer_name": composer,
                     "singers": singers,
                     "lyricists": lyricists,
                     "language": language,
@@ -332,13 +341,14 @@ def _tables_to_films(
                 flag = row[songs_flag_i].strip().casefold()
                 if flag in {"no", "n"}:
                     continue
-            key = name.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
             year = default_year
             if year_i is not None and year_i < len(row):
                 year = _year_from_heading(row[year_i]) or year
+            # Title + year so Geethanjali (1981 album) ≠ Geethanjali (1989 film).
+            key = f"{name.casefold()}|{year or ''}"
+            if key in seen:
+                continue
+            seen.add(key)
             films.append({"film": name, "year": year})
     return films
 
@@ -571,8 +581,11 @@ async def list_composer_films(
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for f in films:
-        key = (f.get("film") or "").casefold()
-        if not key or key in seen:
+        name = (f.get("film") or "").strip()
+        if not name:
+            continue
+        key = f"{name.casefold()}|{f.get('year') or ''}"
+        if key in seen:
             continue
         seen.add(key)
         out.append(f)

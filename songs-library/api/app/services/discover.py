@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Song
 from app.schemas import DiscoverSeedResult, SongCreate
 from app.services.hashing import content_hash
-from app.services import musicbrainz, wikidata, wikipedia
+from app.services import wiki_crawl, wikidata
 
 
 def upsert_song(
@@ -33,6 +31,9 @@ def upsert_song(
 
     if existing:
         changed = False
+        if composer and not existing.composer_name:
+            existing.composer_name = composer
+            changed = True
         if data.singers and not (existing.singers or []):
             existing.singers = list(data.singers)
             changed = True
@@ -108,21 +109,30 @@ def merge_and_upsert_works(
     db: Session,
     *,
     works: list[dict],
-    composer_name: str,
     seed: str,
-    entity_qid: str | None,
+    entity_qid: str | None = None,
+    composer_name: str | None = None,
 ) -> dict[str, int]:
+    """Upsert discovered works. Composer comes from each work when present.
+
+    ``composer_name`` is only a soft fallback for sources that omit the field
+    (legacy MusicBrainz/Wikidata paths) — never used to override page credits.
+    """
     merged: dict[tuple[str, str], dict] = {}
     for work in works:
         name = (work.get("song_name") or "").strip()
         if not name or name == work.get("wikidata_id"):
             continue
-        if name.casefold() == composer_name.casefold():
+        # Drop rows that are clearly the person name, not a song title.
+        seed_cf = seed.strip().casefold()
+        if seed_cf and name.casefold() == seed_cf:
+            continue
+        if composer_name and name.casefold() == composer_name.casefold():
             continue
         key = _work_key(work)
         existing = merged.get(key)
         if not existing:
-            merged[key] = work
+            merged[key] = dict(work)
             continue
         for field in (
             "movie_name",
@@ -131,6 +141,7 @@ def merge_and_upsert_works(
             "musicbrainz_id",
             "wikipedia_title",
             "language",
+            "composer_name",
         ):
             if not existing.get(field) and work.get(field):
                 existing[field] = work[field]
@@ -148,7 +159,7 @@ def merge_and_upsert_works(
             song_name=work["song_name"].strip(),
             movie_name=work.get("movie_name"),
             release_year=work.get("release_year"),
-            composer_name=composer_name,
+            composer_name=work.get("composer_name") or None,
             singers=work.get("singers") or [],
             lyricists=work.get("lyricists") or [],
             language=work.get("language"),
@@ -163,7 +174,9 @@ def merge_and_upsert_works(
             seed_query=seed,
             extra={"source_entity": entity_qid} if entity_qid else None,
         )
-        _, action = upsert_song(db, create, composer_fallback=composer_name)
+        # Soft fallback only when the page/table had no composer credit.
+        fallback = None if create.composer_name else composer_name
+        _, action = upsert_song(db, create, composer_fallback=fallback)
         if action == "inserted":
             inserted += 1
         elif action == "updated":
@@ -180,78 +193,36 @@ def merge_and_upsert_works(
 
 
 async def discover_seed(db: Session, seed: str, limit: int | None = None) -> DiscoverSeedResult:
-    """Synchronous-style discover used by the API when not using background jobs.
-
-    limit=None means ingest everything Wikipedia returns (plus Wikidata / MB caps).
-    """
-    if limit is None:
-        limit = settings.discover_limit_per_seed
-    # 0 or negative => unlimited wikipedia list ingest
-    unlimited = limit <= 0
-    wiki_limit = None if unlimited else limit
-
+    """Run classified Wikipedia BFS for one seed (sync/debug path)."""
     result = DiscoverSeedResult(seed=seed)
     try:
         qid, label = await resolve_seed_meta(seed)
         result.entity_id = qid
         result.entity_label = label
-        composer_name = label or seed.strip()
 
-        async def _wd() -> list[dict]:
-            if not qid:
-                return []
-            rows = await wikidata.fetch_composer_works(
-                qid, limit=limit if not unlimited else settings.discover_wikidata_limit
-            )
-            for w in rows:
-                w.setdefault("source", "wikidata_sparql")
-            return rows
+        max_pages = None
+        if limit is not None and limit > 0:
+            max_pages = limit
+        elif settings.discover_limit_per_seed > 0:
+            max_pages = settings.discover_limit_per_seed
 
-        async def _wiki() -> list[dict]:
-            rows = await wikipedia.fetch_composer_songs(composer_name, limit=wiki_limit)
-            for w in rows:
-                w.setdefault("source", "wikipedia")
-            return rows
-
-        async def _mb() -> list[dict]:
-            mb_id, _ = await musicbrainz.resolve_artist_id(composer_name)
-            if not mb_id:
-                return []
-            rows = await musicbrainz.fetch_artist_works(
-                mb_id,
-                limit=settings.discover_musicbrainz_limit
-                if unlimited
-                else min(settings.discover_musicbrainz_limit, limit or 500),
-            )
-            return rows
-
-        gathered = await asyncio.gather(_wd(), _wiki(), _mb(), return_exceptions=True)
-        works: list[dict] = []
-        errors: list[str] = []
-        labels = ("wikidata", "wikipedia", "musicbrainz")
-        for label_name, item in zip(labels, gathered):
-            if isinstance(item, Exception):
-                errors.append(f"{label_name}: {item}")
-            else:
-                works.extend(item)
-
-        if not qid and not works:
-            result.error = "Could not resolve seed to a Wikidata entity or Wikipedia song list"
+        crawl = await wiki_crawl.crawl_seed_bfs(seed, max_pages=max_pages)
+        works = crawl["works"]
+        if not works and not crawl.get("pages_done"):
+            result.error = "Could not resolve seed to Wikipedia pages"
             return result
 
         stats = merge_and_upsert_works(
             db,
             works=works,
-            composer_name=composer_name,
             seed=seed,
             entity_qid=qid,
+            composer_name=None,
         )
         result.found = stats["found"]
         result.inserted = stats["inserted"]
         result.skipped = stats["skipped"]
         result.updated = stats["updated"]
-        if errors and result.found == 0:
-            result.error = "; ".join(errors)
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         result.error = str(exc)

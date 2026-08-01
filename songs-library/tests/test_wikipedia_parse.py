@@ -77,6 +77,7 @@ def test_rowspan_film_applies_to_second_song():
     assert works[0]["song_name"] == "Solam Vidhaikkaiyile"
     assert works[0]["movie_name"] == "16 Vayadhinile"
     assert works[0]["release_year"] == 1977
+    assert works[0]["composer_name"] == "Ilaiyaraaja"
     assert works[1]["song_name"] == "Chinnakiliye"
     assert works[1]["movie_name"] == "16 Vayadhinile"
     assert works[1]["release_year"] == 1977

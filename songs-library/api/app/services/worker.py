@@ -6,7 +6,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import DiscoverJob
 from app.services.discover import merge_and_upsert_works, resolve_seed_meta
-from app.services import enrich, musicbrainz, wikipedia, wikidata
+from app.services import enrich, wiki_crawl
 from app.services.youtube_resolve import resolve_unmapped, refresh_popularity_from_views
 
 
@@ -63,10 +63,10 @@ def requeue_discover_job(db: Session, job: DiscoverJob, *, reset_progress: bool 
         job.cursor_json = None
         job.message = "Restarted from the beginning by user"
     else:
-        film_i = int((job.cursor_json or {}).get("film_index") or 0)
+        pages = int((job.cursor_json or {}).get("pages_done") or job.pages_done or 0)
         job.message = (
-            f"Resume queued by user (continuing after film {film_i})"
-            if film_i > 0
+            f"Resume queued by user (continuing after {pages} pages)"
+            if pages > 0
             else "Resume queued by user"
         )
     db.commit()
@@ -95,202 +95,110 @@ async def run_discover_job(job_id: str) -> None:
         if not job or _is_stopped(job.status):
             return
         prev_cursor = dict(job.cursor_json or {})
-        resume_film_index = int(prev_cursor.get("film_index") or 0)
-        prior_inserted = int(job.inserted or 0)
-        is_resume = resume_film_index > 0 or prior_inserted > 0
+        # New BFS cursor uses queue/seen; legacy film_index-only cursors start fresh.
+        bfs_cursor = None
+        if prev_cursor.get("queue") is not None or prev_cursor.get("seen"):
+            bfs_cursor = prev_cursor
+        is_resume = bool(bfs_cursor)
 
         job.status = "running"
         job.phase = "resolve"
         job.finished_at = None
         job.message = (
-            f"Resuming after film {resume_film_index}…"
-            if resume_film_index > 0
-            else "Resolving composer…"
+            f"Resuming Wikipedia crawl ({int(prev_cursor.get('pages_done') or 0)} pages done)…"
+            if is_resume
+            else "Searching Wikipedia for seed…"
         )
         db.commit()
         qid, label = await resolve_seed_meta(job.seed)
         job = _reload_active_job(db, job_id)
         if not job:
             return
-        composer_name = label or job.seed.strip()
         job.entity_id = qid
         job.entity_label = label
-        job.phase = "wikipedia_lists"
-        job.message = f"Scanning Wikipedia song lists for {composer_name}…"
+        job.phase = "wikipedia_bfs"
+        job.message = f"Crawling Wikipedia from {label or job.seed}…"
         db.commit()
-        # Phase 1: full Wikipedia song-list pages (no artificial cap).
-        wiki_works, list_pages = await wikipedia.fetch_composer_songs_detailed(
-            composer_name, limit=None
-        )
-        job = _reload_active_job(db, job_id)
-        if not job:
-            return
-        cursor: dict = {
-            "wiki_list_pages": list_pages,
-            "filmography_pages": list(prev_cursor.get("filmography_pages") or []),
-            "film_pages": list(prev_cursor.get("film_pages") or []),
-            "film_index": resume_film_index,
-            "films_total": int(prev_cursor.get("films_total") or 0),
-        }
-        job.cursor_json = dict(cursor)
-        db.commit()
-        wd_works: list[dict] = []
-        if qid:
-            try:
-                wd_works = await wikidata.fetch_composer_works(
-                    qid, limit=settings.discover_wikidata_limit
-                )
-                for w in wd_works:
-                    w.setdefault("source", "wikidata_sparql")
-            except Exception as exc:  # noqa: BLE001
-                job = _reload_active_job(db, job_id)
-                if not job:
-                    return
-                job.message = f"Wikidata partial failure: {exc}"
-        job = _reload_active_job(db, job_id)
-        if not job:
-            return
-        for w in wiki_works:
-            w.setdefault("source", "wikipedia")
-        stats = merge_and_upsert_works(
-            db,
-            works=wiki_works + wd_works,
-            composer_name=composer_name,
-            seed=job.seed,
-            entity_qid=qid,
-        )
-        if is_resume:
-            # Keep counters from the interrupted run; only add new deltas.
-            job.inserted = prior_inserted + int(stats["inserted"])
-            job.skipped = int(job.skipped or 0) + int(stats["skipped"])
-            job.updated = int(job.updated or 0) + int(stats["updated"])
-            job.found = max(int(job.found or 0), int(stats["found"]))
-        else:
-            job.found = stats["found"]
-            job.inserted = stats["inserted"]
-            job.skipped = stats["skipped"]
-            job.updated = stats["updated"]
-        job.pages_done = len(list_pages) or 1
-        job.cursor_json = dict(cursor)
-        db.commit()
-        job = _reload_active_job(db, job_id)
-        if not job:
-            return
-        # Phase 2: page-to-page film soundtrack crawl.
-        job.phase = "wikipedia_films"
-        job.message = "Walking filmography pages for soundtrack tables…"
-        db.commit()
-        try:
-            films, filmography_pages = await wikipedia.list_composer_films(composer_name)
-        except Exception as exc:  # noqa: BLE001
-            films = []
-            filmography_pages = []
+
+        commit_every = max(1, int(settings.discover_queue_batch_commit))
+        pages_since_commit = 0
+
+        async def on_progress(state: dict) -> None:
+            nonlocal pages_since_commit, job
             job = _reload_active_job(db, job_id)
             if not job:
-                return
-            job.message = f"Film list failed: {exc}"
-            db.commit()
-        job = _reload_active_job(db, job_id)
-        if not job:
-            return
-        cursor["filmography_pages"] = filmography_pages
-        cursor["films_total"] = len(films)
-        # Resume mid-list after Render sleep / manual requeue.
-        start_at = min(max(resume_film_index, 0), len(films))
-        cursor["film_index"] = start_at
-        job.cursor_json = dict(cursor)
-        if start_at > 0:
-            job.message = (
-                f"Resuming film crawl at {start_at + 1}/{len(films)}…"
-            )
-        db.commit()
-        batch = settings.discover_films_per_tick
-        film_pages: list[str] = list(cursor.get("film_pages") or [])
-        for i, film in enumerate(films):
-            if i < start_at:
-                continue
-            job = _reload_active_job(db, job_id)
-            if not job:
-                return
-            cursor["film_index"] = i + 1
-            job.cursor_json = dict(cursor)
-            job.pages_done = len(list_pages) + i + 1
-            job.message = (
-                f"Film {i + 1}/{len(films)}: {film.get('film')} "
-                f"(inserted {job.inserted} so far)"
-            )
-            db.commit()
-            try:
-                works, film_page = await wikipedia.fetch_film_soundtrack_songs(
-                    film["film"], year=film.get("year")
-                )
-            except Exception:  # noqa: BLE001
-                works, film_page = [], None
-            job = _reload_active_job(db, job_id)
-            if not job:
-                return
-            if film_page and film_page not in film_pages:
-                film_pages.append(film_page)
-                cursor["film_pages"] = film_pages
-            if works:
+                raise asyncio.CancelledError()
+            delta = list(state.get("works_delta") or [])
+            if delta:
                 stats = merge_and_upsert_works(
                     db,
-                    works=works,
-                    composer_name=composer_name,
+                    works=delta,
                     seed=job.seed,
                     entity_qid=qid,
+                    composer_name=None,
                 )
-                job.inserted += stats["inserted"]
-                job.skipped += stats["skipped"]
-                job.updated += stats["updated"]
-                job.found += stats["found"]
-                job.cursor_json = dict(cursor)
+                job.inserted = int(job.inserted or 0) + int(stats["inserted"])
+                job.skipped = int(job.skipped or 0) + int(stats["skipped"])
+                job.updated = int(job.updated or 0) + int(stats["updated"])
+                job.found = int(job.found or 0) + int(stats["found"])
+            cursor = {
+                "queue": state.get("queue") or [],
+                "seen": state.get("seen") or [],
+                "pages_done": state.get("pages_done") or 0,
+                "seed_pages": state.get("seed_pages") or [],
+                "film_pages": state.get("film_pages") or [],
+                "hub_pages": state.get("hub_pages") or [],
+                "films_total": state.get("films_total") or 0,
+                "film_index": state.get("film_index") or 0,
+            }
+            job.cursor_json = cursor
+            job.pages_done = int(cursor["pages_done"])
+            kind = state.get("kind") or ""
+            page = state.get("current_page") or ""
+            job.message = (
+                f"{kind}: {page} "
+                f"(pages {job.pages_done}, inserted {job.inserted})"
+            )
+            pages_since_commit += 1
+            if pages_since_commit >= commit_every or delta:
                 db.commit()
-            await asyncio.sleep(0.25)
-            # Keep event loop responsive; still continuous within one job.
-            if (i + 1) % batch == 0:
-                await asyncio.sleep(0.05)
-        job = _reload_active_job(db, job_id)
-        if not job:
-            return
-        cursor["film_pages"] = film_pages
-        job.cursor_json = dict(cursor)
-        db.commit()
-        # Phase 3: MusicBrainz pagination.
-        job.phase = "musicbrainz"
-        job.message = "Paging MusicBrainz works…"
-        db.commit()
+                pages_since_commit = 0
+
+        if not is_resume:
+            job.found = 0
+            job.inserted = 0
+            job.skipped = 0
+            job.updated = 0
+            db.commit()
+
         try:
-            mb_id, _ = await musicbrainz.resolve_artist_id(composer_name)
-            job = _reload_active_job(db, job_id)
-            if not job:
-                return
-            if mb_id:
-                mb_works = await musicbrainz.fetch_artist_works(
-                    mb_id, limit=settings.discover_musicbrainz_limit
-                )
-                job = _reload_active_job(db, job_id)
-                if not job:
-                    return
-                stats = merge_and_upsert_works(
-                    db,
-                    works=mb_works,
-                    composer_name=composer_name,
-                    seed=job.seed,
-                    entity_qid=qid,
-                )
-                job.inserted += stats["inserted"]
-                job.skipped += stats["skipped"]
-                job.updated += stats["updated"]
-                job.found += stats["found"]
-        except Exception as exc:  # noqa: BLE001
-            job = _reload_active_job(db, job_id)
-            if not job:
-                return
-            job.message = f"MusicBrainz partial failure: {exc}"
+            result = await wiki_crawl.crawl_seed_bfs(
+                job.seed,
+                cursor=bfs_cursor,
+                on_progress=on_progress,
+            )
+        except asyncio.CancelledError:
+            return
+
         job = _reload_active_job(db, job_id)
         if not job:
             return
+        job.cursor_json = result.get("cursor") or job.cursor_json
+        job.pages_done = int(result.get("pages_done") or job.pages_done or 0)
+        # If crawl returned works that somehow weren't flushed (empty progress), upsert once.
+        # Incremental path already persisted deltas; avoid double-counting by only
+        # upserting when nothing was inserted this run and works exist.
+        remaining_queue = (job.cursor_json or {}).get("queue") or []
+        if remaining_queue and settings.discover_max_pages and job.pages_done >= settings.discover_max_pages:
+            job.phase = "paused_budget"
+            job.status = "pending"
+            job.message = (
+                f"Page budget reached ({job.pages_done}); re-queued to continue"
+            )
+            job.finished_at = None
+            db.commit()
+            return
+
         job.phase = "done"
         job.status = "completed"
         job.message = (

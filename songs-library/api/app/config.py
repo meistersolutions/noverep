@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     discover_wikidata_limit: int = 500
     discover_musicbrainz_limit: int = 2000
     discover_films_per_tick: int = 25
+    # Classified Wikipedia BFS budgets (0 pages = unlimited).
+    discover_max_pages: int = 2500
+    discover_max_depth: int = 4
+    discover_queue_batch_commit: int = 5
     enrich_batch_size: int = 15
     enrich_idle_seconds: float = 20.0
     enrich_pause_seconds: float = 2.0
