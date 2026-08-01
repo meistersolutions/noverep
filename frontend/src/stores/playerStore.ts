@@ -594,6 +594,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         ? currentTrack
         : null);
 
+    // History posts in parallel with UI update; awaited only before server purge/sync.
+    let historyPromise: Promise<void> = Promise.resolve();
+
     if (previous && previous.provider_track_id !== videoId) {
       // Mark heard immediately so local queue filters drop it even if the API is slow
       // (car Bluetooth / Android Auto often delay WebView network).
@@ -610,23 +613,25 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           ? Number(prevDurationSec)
           : duration || previous.duration_seconds || 0,
       );
-      try {
-        if (ended) {
-          const completeAt = durSec > 0 ? durSec : Math.max(listenSec, 1);
-          await recordPlayProgress(previous as Track, sessionId, completeAt, completeAt, false);
-        } else {
-          await recordPlayProgress(
-            previous as Track,
-            sessionId,
-            Math.max(listenSec, skipped ? 1 : 0),
-            durSec,
-            skipped,
-          );
+      historyPromise = (async () => {
+        try {
+          if (ended) {
+            const completeAt = durSec > 0 ? durSec : Math.max(listenSec, 1);
+            await recordPlayProgress(previous as Track, sessionId, completeAt, completeAt, false);
+          } else {
+            await recordPlayProgress(
+              previous as Track,
+              sessionId,
+              Math.max(listenSec, skipped ? 1 : 0),
+              durSec,
+              skipped,
+            );
+          }
+          get().bumpHistory();
+        } catch {
+          /* local heard mark already applied */
         }
-        get().bumpHistory();
-      } catch {
-        /* still advance UI — local heard mark already applied */
-      }
+      })();
       clearPlaybackPosition(previous.provider_track_id);
     }
 
@@ -707,7 +712,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
       }
 
-      // Purge heard songs server-side now that history was written.
+      // Purge heard songs server-side once history write has landed (or failed).
+      await historyPromise;
       const synced = await api.syncQueue().catch(() => null);
       const serverQueue = synced ?? (await api.getQueue().catch(() => null));
       if (serverQueue?.length) {
@@ -837,15 +843,16 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const { queue, volume, sessionId, currentTrack, duration } = get();
 
       if (manualSkip) {
-        await get().recordCurrentPlayback(true);
+        // Local heard first so Up Next filters immediately; network must not block skip audio.
+        if (currentTrack) markTrackHeardLocally(currentTrack.provider_track_id);
+        void get().recordCurrentPlayback(true);
       } else if (currentTrack) {
+        // Same for auto-next: mark heard sync, post history in background so playback
+        // starts without waiting on /playback/event.
         markTrackHeardLocally(currentTrack.provider_track_id);
-        try {
-          await recordPlayProgress(currentTrack, sessionId, duration, duration, false);
-          get().bumpHistory();
-        } catch {
-          /* local heard mark already applied */
-        }
+        void recordPlayProgress(currentTrack, sessionId, duration, duration, false)
+          .then(() => get().bumpHistory())
+          .catch(() => {});
       }
 
       const trimmed = queueWithoutCurrent(queue, currentTrack);
