@@ -8,6 +8,10 @@ import {
   PopularityRangeSlider,
 } from '@/components/PopularityRangeSlider';
 import { effectiveLanguages } from '@/lib/languages';
+import {
+  loadQueueFilterSession,
+  saveQueueFilterSession,
+} from '@/lib/queueFilterSession';
 import { usePlayerStore } from '@/stores/playerStore';
 import { YoutubeDiscoveryToggle, useYoutubeDiscoveryEnabled } from '@/components/YoutubeDiscoveryToggle';
 import type { QueueRefreshOptions } from '@/lib/api';
@@ -52,20 +56,51 @@ export function QueueRefreshPanel({
   ).join('\0');
   const [draft, setDraft] = useState('');
   const [open, setOpen] = useState(true);
-  const [languages, setLanguages] = useState<string[]>([]);
-  const [yearFrom, setYearFrom] = useState<number | null>(null);
-  const [yearTo, setYearTo] = useState<number | null>(null);
-  const [popularityMin, setPopularityMin] = useState(POPULARITY_MIN);
-  const [popularityMax, setPopularityMax] = useState(POPULARITY_MAX);
+  const sessionFilters = loadQueueFilterSession();
+  const [languages, setLanguages] = useState<string[]>(() => sessionFilters?.languages ?? []);
+  const [yearFrom, setYearFrom] = useState<number | null>(() =>
+    sessionFilters && 'yearFrom' in sessionFilters ? (sessionFilters.yearFrom ?? null) : null,
+  );
+  const [yearTo, setYearTo] = useState<number | null>(() =>
+    sessionFilters && 'yearTo' in sessionFilters ? (sessionFilters.yearTo ?? null) : null,
+  );
+  const [popularityMin, setPopularityMin] = useState(() =>
+    typeof sessionFilters?.popularityMin === 'number'
+      ? sessionFilters.popularityMin
+      : POPULARITY_MIN,
+  );
+  const [popularityMax, setPopularityMax] = useState(() =>
+    typeof sessionFilters?.popularityMax === 'number'
+      ? sessionFilters.popularityMax
+      : POPULARITY_MAX,
+  );
   const youtubeDiscovery = useYoutubeDiscoveryEnabled();
   const lastHydratedKey = useRef<string | undefined>(undefined);
+  const hydratedFromPrefs = useRef(false);
 
   useEffect(() => {
-    if (!preferences) return;
-    setLanguages(effectiveLanguages(preferences.preferred_languages, preferences.language_preference));
-    setYearFrom(preferences.discovery_year_from);
-    setYearTo(preferences.discovery_year_to);
+    if (!preferences || hydratedFromPrefs.current) return;
+    hydratedFromPrefs.current = true;
+    const saved = loadQueueFilterSession();
+    // Session wins for the lifetime of the tab; prefs fill gaps on first load only.
+    if (!saved || !('languages' in saved)) {
+      setLanguages(effectiveLanguages(preferences.preferred_languages, preferences.language_preference));
+    }
+    if (!saved || (!('yearFrom' in saved) && !('yearTo' in saved))) {
+      setYearFrom(preferences.discovery_year_from);
+      setYearTo(preferences.discovery_year_to);
+    }
   }, [preferences]);
+
+  useEffect(() => {
+    saveQueueFilterSession({
+      languages,
+      yearFrom,
+      yearTo,
+      popularityMin,
+      popularityMax,
+    });
+  }, [languages, yearFrom, yearTo, popularityMin, popularityMax]);
 
   // Hydrate chips when saved seeds change — do NOT re-fill after the user clears them.
   useEffect(() => {
@@ -251,7 +286,14 @@ export function QueueRefreshPanel({
         <div className="px-4 pb-4 space-y-5 border-t border-white/10 pt-4">
           <div className="space-y-2">
             <p className="text-sm font-medium">Languages</p>
-            <LanguageMultiSelect compact selected={languages} onChange={setLanguages} />
+            <LanguageMultiSelect
+              compact
+              selected={languages}
+              onChange={(next) => {
+                setLanguages(next);
+                saveQueueFilterSession({ languages: next });
+              }}
+            />
           </div>
 
           <div className="space-y-2">
@@ -263,6 +305,7 @@ export function QueueRefreshPanel({
               onSave={(from, to) => {
                 setYearFrom(from);
                 setYearTo(to);
+                saveQueueFilterSession({ yearFrom: from, yearTo: to });
               }}
             />
           </div>
@@ -278,6 +321,7 @@ export function QueueRefreshPanel({
               onChange={(nextMin, nextMax) => {
                 setPopularityMin(nextMin);
                 setPopularityMax(nextMax);
+                saveQueueFilterSession({ popularityMin: nextMin, popularityMax: nextMax });
               }}
             />
           </div>

@@ -26,6 +26,7 @@ import {
 import {
   clearHeardTrackCache,
   filterQueueAgainstHeard,
+  markTrackHeardLocally,
   syncHeardFromHistory,
 } from '@/lib/heardTracksCache';
 import { savePlaybackPosition, clearPlaybackPosition } from '@/lib/playbackPositionCache';
@@ -215,7 +216,15 @@ function playQueueItemOptimistic(
 
 function applyServerQueueAfterSkip(serverQueue: QueueItem[], serverItem: QueueItem) {
   const deduped = dedupeQueue(serverQueue);
-  const aligned = alignQueueWithCurrentTrack(deduped, serverItem);
+  // Drop heard tracks (including the one just finished) from Up Next.
+  const filtered = filterQueueAgainstHeard(deduped, serverItem.provider_track_id);
+  const withoutStaleCurrent = filtered.filter(
+    (q) =>
+      q.provider_track_id === serverItem.provider_track_id ||
+      q.id === serverItem.id ||
+      !q.is_current,
+  );
+  const aligned = alignQueueWithCurrentTrack(withoutStaleCurrent, serverItem);
   return {
     queue: aligned,
     currentTrack: serverItem,
@@ -586,6 +595,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         : null);
 
     if (previous && previous.provider_track_id !== videoId) {
+      // Mark heard immediately so local queue filters drop it even if the API is slow
+      // (car Bluetooth / Android Auto often delay WebView network).
+      markTrackHeardLocally(previous.provider_track_id);
       const ended = reason === 'ended';
       const skipped = reason === 'next' || reason === 'previous';
       const listenSec = Math.max(
@@ -613,7 +625,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
         get().bumpHistory();
       } catch {
-        /* still advance UI */
+        /* still advance UI — local heard mark already applied */
       }
       clearPlaybackPosition(previous.provider_track_id);
     }
@@ -667,6 +679,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
     try {
       // Align server current to the video native already started — never blind nextTrack.
+      // playQueueItem deletes the previous is_current row on the server.
       if (queueItemId && queue.some((q) => q.id === queueItemId)) {
         await api.playQueueItem(queueItemId);
       } else {
@@ -674,6 +687,23 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         const byVideo = serverQueue?.find((q) => q.provider_track_id === videoId);
         if (byVideo) {
           await api.playQueueItem(byVideo.id).catch(() => null);
+        }
+      }
+
+      // If the finished track is still on the server (was not is_current), remove it.
+      const prevQueueId =
+        previous && 'id' in previous && typeof previous.id === 'string' ? previous.id : null;
+      if (prevQueueId && previous?.provider_track_id !== videoId) {
+        const afterPlay = await api.getQueue().catch(() => null);
+        const leftover = afterPlay?.find(
+          (q) =>
+            q.id === prevQueueId ||
+            q.provider_track_id === previous.provider_track_id,
+        );
+        if (leftover && !leftover.is_current) {
+          await api
+            .removeQueueItem(leftover.id, sessionId, 0, 100)
+            .catch(() => null);
         }
       }
 
@@ -809,9 +839,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       if (manualSkip) {
         await get().recordCurrentPlayback(true);
       } else if (currentTrack) {
-        void recordPlayProgress(currentTrack, sessionId, duration, duration, false).then(() =>
-          get().bumpHistory(),
-        );
+        markTrackHeardLocally(currentTrack.provider_track_id);
+        try {
+          await recordPlayProgress(currentTrack, sessionId, duration, duration, false);
+          get().bumpHistory();
+        } catch {
+          /* local heard mark already applied */
+        }
       }
 
       const trimmed = queueWithoutCurrent(queue, currentTrack);

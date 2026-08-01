@@ -53,7 +53,39 @@ class TestSkipRecommendationCandidate:
         )
 
 
-class TestHeardQueueItem:
+class TestLibraryExcludeHashes:
+    def setup_method(self):
+        self.svc = _svc()
+
+    def test_uses_album_as_movie_for_hash(self):
+        from app.application.services.library_hash import library_content_hash
+
+        snap = HeardSongSnapshot(
+            song_id=uuid4(),
+            title="Raja Raja Chozhan",
+            artist="Ilaiyaraaja",
+            duration_seconds=300,
+            album="Rettai Vaal Kuruvi",
+        )
+        hashes = self.svc._library_exclude_hashes([snap])
+        expected = library_content_hash("Raja Raja Chozhan", "Rettai Vaal Kuruvi")
+        assert expected in hashes
+        # Also includes title-only fallback
+        assert library_content_hash("Raja Raja Chozhan", None) in hashes
+
+    def test_without_album_still_emits_title_hash(self):
+        from app.application.services.library_hash import library_content_hash
+
+        snap = HeardSongSnapshot(
+            song_id=uuid4(),
+            title="Kalaimane",
+            artist="Hariharan",
+            duration_seconds=200,
+            album=None,
+        )
+        hashes = self.svc._library_exclude_hashes([snap])
+        assert library_content_hash("Kalaimane", None) in hashes
+
     def setup_method(self):
         self.svc = _svc()
         self.song_id = uuid4()

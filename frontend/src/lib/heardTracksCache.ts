@@ -49,12 +49,17 @@ export function filterQueueAgainstHeard<
 >(queue: T[], keepProviderTrackId?: string | null): T[] {
   const heard = getHeardTrackIdSet();
   if (!heard.size) return queue;
-  return queue.filter(
-    (item) =>
-      item.is_current ||
-      item.provider_track_id === keepProviderTrackId ||
-      !heard.has(item.provider_track_id),
-  );
+  return queue.filter((item) => {
+    // Always keep the track that is actually playing now.
+    if (keepProviderTrackId && item.provider_track_id === keepProviderTrackId) {
+      return true;
+    }
+    // Heard songs must leave Up Next — even if a stale server row still has is_current.
+    if (heard.has(item.provider_track_id)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 export function clearHeardTrackCache(): void {

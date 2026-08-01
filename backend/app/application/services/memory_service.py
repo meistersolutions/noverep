@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import MEMORY_WINDOW_DAYS, MemoryWindow
 from app.infrastructure.database.models import (
+    AlbumModel,
     ListeningHistoryModel,
     SongModel,
     UserPreferencesModel,
@@ -19,6 +20,7 @@ class HeardSongSnapshot:
     title: str
     artist: str
     duration_seconds: int | None
+    album: str | None = None
 
 
 class MemoryService:
@@ -127,8 +129,10 @@ class MemoryService:
                 SongModel.title,
                 ListeningHistoryModel.artist_name,
                 SongModel.duration_seconds,
+                func.coalesce(ListeningHistoryModel.album_name, AlbumModel.title),
             )
             .join(SongModel, ListeningHistoryModel.song_id == SongModel.id)
+            .outerjoin(AlbumModel, SongModel.album_id == AlbumModel.id)
             .where(
                 ListeningHistoryModel.user_id == user_id,
                 ListeningHistoryModel.explicitly_requested.is_(False),
@@ -143,6 +147,7 @@ class MemoryService:
                 title=row[1],
                 artist=row[2],
                 duration_seconds=row[3],
+                album=row[4],
             )
             for row in rows.all()
         ]

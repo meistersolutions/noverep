@@ -92,8 +92,11 @@ public final class PlaybackQueueStore {
         synchronized (LOCK) {
             if (items.isEmpty()) return null;
             if (index + 1 >= items.size()) return null;
-            index += 1;
-            return items.get(index);
+            // Drop the finished track (and anything before it) so it cannot reappear
+            // as "up next" when JS later re-syncs a stale queue snapshot.
+            items.subList(0, index + 1).clear();
+            index = 0;
+            return items.isEmpty() ? null : items.get(0);
         }
     }
 

@@ -135,10 +135,11 @@ export async function syncNativePlaybackQueue(): Promise<void> {
   if (!isAndroidNative()) return;
   try {
     const { usePlayerStore } = await import('@/stores/playerStore');
+    const { filterQueueAgainstHeard } = await import('@/lib/heardTracksCache');
     const { queue, currentTrack } = usePlayerStore.getState();
     // Prefer the ExoPlayer video id — store currentTrack can lag during native skips.
     const currentId = activeVideoId || currentTrack?.provider_track_id;
-    const items = queue
+    const items = filterQueueAgainstHeard(queue, currentId)
       .filter((q) => q.provider_track_id)
       .map((q) => ({
         videoId: q.provider_track_id,

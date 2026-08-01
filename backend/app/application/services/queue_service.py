@@ -17,7 +17,7 @@ from app.application.services.language_utils import (
 from app.application.services.library_hash import library_content_hash
 from app.application.services.memory_service import HeardSongSnapshot, MemoryService
 from app.application.services.recommendation_engine import RecommendationEngine
-from app.application.services.song_matcher import is_same_song
+from app.application.services.song_matcher import extract_movie_hint, is_same_song
 from app.application.services.song_normalizer import SongNormalizer
 from app.domain.entities import ProviderTrack
 from app.infrastructure.database.models import (
@@ -361,17 +361,21 @@ class QueueService:
         return mapped
 
     def _library_exclude_hashes(self, heard_snapshots: list[HeardSongSnapshot]) -> list[str]:
-        """Approximate library content hashes for heard songs (never-repeat hint)."""
+        """Library content hashes for heard songs (song+movie; matches Songs Library)."""
         hashes: list[str] = []
+        seen: set[str] = set()
         for snap in heard_snapshots:
-            hashes.append(
-                library_content_hash(
-                    snap.title,
-                    None,
-                    snap.artist,
-                    None,
-                )
-            )
+            movie = (snap.album or "").strip() or None
+            if not movie:
+                movie = extract_movie_hint(snap.title, snap.artist, snap.album)
+            # Primary: song|movie (catalog identity). Also song|"" as fallback for
+            # catalog rows without a movie name.
+            candidates = {movie, None} if movie else {None}
+            for movie_hint in candidates:
+                digest = library_content_hash(snap.title, movie_hint)
+                if digest not in seen:
+                    seen.add(digest)
+                    hashes.append(digest)
         return hashes
 
     async def _append_from_songs_library(
