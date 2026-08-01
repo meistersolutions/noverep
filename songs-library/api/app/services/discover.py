@@ -19,7 +19,7 @@ def upsert_song(
     Returns (song, action) where action is inserted|skipped|updated.
     """
     composer = data.composer_name or composer_fallback
-    h = content_hash(data.song_name, data.movie_name, composer, data.release_year)
+    h = content_hash(data.song_name, data.movie_name)
 
     existing = None
     if data.wikidata_id:

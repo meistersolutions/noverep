@@ -61,6 +61,4 @@ def test_export_playlist_mapped_only():
 
 
 def test_content_hash_matches_library():
-    assert content_hash("Test", "Movie", "Composer", 2000) == content_hash(
-        "test", "movie", "composer", 2000
-    )
+    assert content_hash("Test", "Movie") == content_hash("test", "movie")
