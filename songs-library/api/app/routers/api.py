@@ -22,10 +22,12 @@ from app.schemas import (
     SongUpdate,
     StatsOut,
     WorkerStatusOut,
+    RehashResultOut,
 )
 from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
 from app.services.playlist_export import export_playlist
+from app.services.rehash import rehash_all_songs
 from app.services.youtube_resolve import (
     resolve_unmapped,
     resolve_one_song,
@@ -88,6 +90,17 @@ def stats(db: Session = Depends(get_db)):
         metadata_only=meta,
         youtube_api_configured=_data_api_configured(),
     )
+
+
+@router.post("/maintenance/rehash-content-hashes", response_model=RehashResultOut)
+def maintenance_rehash_content_hashes(db: Session = Depends(get_db)):
+    """Regenerate content_hash (song|movie|year|language) and merge collisions."""
+    try:
+        result = rehash_all_songs(db)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(500, f"Rehash failed: {exc}") from exc
+    return RehashResultOut(**result)
 
 
 @router.get("/composers", response_model=list[ComposerOut])

@@ -180,6 +180,14 @@ class StatsOut(BaseModel):
     youtube_api_configured: bool = False
 
 
+class RehashResultOut(BaseModel):
+    loaded: int
+    hash_values_changed: int
+    collision_groups: int
+    merged_deleted: int
+    remaining: int
+
+
 class ComposerOut(BaseModel):
     name: str
     song_count: int
