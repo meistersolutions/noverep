@@ -31,7 +31,6 @@ def _merge_into(db: Session, keeper: Song, donor: Song) -> None:
     """Merge donor into keeper; never copy unique ids that would collide."""
     donor_mb = donor.musicbrainz_id
     donor_wd = donor.wikidata_id
-    # Release unique keys on donor before keeper inherits them.
     donor.musicbrainz_id = None
     donor.wikidata_id = None
     db.flush()
@@ -67,53 +66,50 @@ def _merge_into(db: Session, keeper: Song, donor: Song) -> None:
 
 
 def rehash_all_songs(db: Session) -> dict[str, int]:
-    """Recompute content_hash for every song; merge rows that collide.
+    """Recompute content_hash (song|movie) for every song; merge collisions.
 
-    Uses a two-phase update so the unique ``content_hash`` index never
-    rejects mid-flight duplicate assignments.
+    Order matters for the unique index:
+    1) Move every row onto a temporary unique hash
+    2) Merge/delete duplicate groups while still on temps
+    3) Assign the final song|movie hash once per survivor
     """
     songs = db.query(Song).all()
     loaded = len(songs)
 
-    planned: dict[str, str] = {}
     by_hash: dict[str, list[Song]] = defaultdict(list)
     changed = 0
     for song in songs:
-        new_h = content_hash(
-            song.song_name,
-            song.movie_name,
-            release_year=song.release_year,
-            language=song.language,
-        )
+        new_h = content_hash(song.song_name, song.movie_name)
         if song.content_hash != new_h:
             changed += 1
-        planned[song.id] = new_h
         by_hash[new_h].append(song)
 
-    # Free unique index before assigning new hashes / deleting duplicates.
     for song in songs:
         song.content_hash = f"tmp-{song.id}"
     db.flush()
 
     deleted = 0
     collision_groups = 0
-    for rows in by_hash.values():
-        if len(rows) < 2:
-            for song in rows:
-                song.content_hash = planned[song.id]
+    survivors: dict[str, Song] = {}
+    for new_h, rows in by_hash.items():
+        if len(rows) == 1:
+            survivors[new_h] = rows[0]
             continue
         collision_groups += 1
         keeper = _pick_keeper(rows)
-        keeper.content_hash = planned[keeper.id]
+        survivors[new_h] = keeper
         for donor in rows:
             if donor.id == keeper.id:
                 continue
             _merge_into(db, keeper, donor)
             db.delete(donor)
-            db.flush()
             deleted += 1
+        db.flush()
 
+    for new_h, song in survivors.items():
+        song.content_hash = new_h
     db.commit()
+
     remaining = db.query(Song).count()
     return {
         "loaded": loaded,
