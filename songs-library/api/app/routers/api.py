@@ -10,6 +10,7 @@ from app.schemas import (
     DiscoverJobOut,
     DiscoverRequest,
     DiscoverResponse,
+    DiscoverSeedResult,
     EnrichStatusOut,
     ComposerOut,
     PlaylistExportRequest,
@@ -28,6 +29,7 @@ from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
 from app.services.playlist_export import export_playlist
 from app.services.rehash import rehash_all_songs
+from app.services.seed_match import apply_seed_match, count_songs_for_seed
 from app.services.youtube_resolve import (
     resolve_unmapped,
     resolve_one_song,
@@ -170,14 +172,7 @@ def list_songs(
 ):
     query = db.query(Song)
     if q:
-        like = f"%{q}%"
-        query = query.filter(
-            or_(
-                Song.song_name.ilike(like),
-                Song.movie_name.ilike(like),
-                Song.composer_name.ilike(like),
-            )
-        )
+        query = apply_seed_match(query, q)
     if composer:
         query = query.filter(Song.composer_name.ilike(f"%{composer}%"))
     if movie:
@@ -263,6 +258,10 @@ async def discover(body: DiscoverRequest, db: Session = Depends(get_db)):
 
     Pass limit_per_seed=0 (default) for full ingest. A positive limit runs a
     one-shot capped discover for debugging.
+
+    By default a seed is not queued when the catalog already has at least one
+    song matching that seed across composer/singer/director/cast/title/movie.
+    Pass ``force=true`` to queue anyway.
     """
     limit = body.limit_per_seed
     if limit is not None and limit > 0:
@@ -276,9 +275,23 @@ async def discover(body: DiscoverRequest, db: Session = Depends(get_db)):
         )
 
     job_ids: list[str] = []
+    results: list[DiscoverSeedResult] = []
     for seed in body.seeds:
         cleaned = seed.strip()
         if not cleaned:
+            continue
+        existing_count = count_songs_for_seed(db, cleaned)
+        if existing_count > 0 and not body.force:
+            results.append(
+                DiscoverSeedResult(
+                    seed=cleaned,
+                    found=existing_count,
+                    inserted=0,
+                    skipped=existing_count,
+                    updated=0,
+                    error="skipped_existing: catalog already has matching songs",
+                )
+            )
             continue
         # Reuse an already-running job for the same seed.
         active = (
@@ -299,9 +312,9 @@ async def discover(body: DiscoverRequest, db: Session = Depends(get_db)):
         job_ids.append(job.id)
     db.commit()
     return DiscoverResponse(
-        results=[],
+        results=results,
         total_inserted=0,
-        total_skipped=0,
+        total_skipped=sum(r.skipped for r in results),
         total_updated=0,
         job_ids=job_ids,
     )
@@ -460,9 +473,10 @@ async def enrich_run(
 @router.post("/sample", response_model=list[SongOut])
 def sample(body: SampleRequest, db: Session = Depends(get_db)):
     query = db.query(Song)
-    composer = body.composer or body.seed
-    if composer:
-        query = query.filter(Song.composer_name.ilike(f"%{composer}%"))
+    # Seed may be composer, singer, director, actor, movie, or song title.
+    seed = (body.seed or body.composer or "").strip() or None
+    if seed:
+        query = apply_seed_match(query, seed)
     if body.year_from is not None and body.year_to is not None:
         query = query.filter(
             or_(

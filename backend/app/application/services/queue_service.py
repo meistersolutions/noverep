@@ -398,7 +398,7 @@ class QueueService:
             return queue
 
         active = self._normalize_seeds(seeds) or self._active_seeds(pref)
-        composers = active if active else [None]
+        seed_list = active if active else [None]
 
         existing = await self._queue_track_ids(queue)
         existing_songs = await self._queue_song_ids(queue)
@@ -420,7 +420,7 @@ class QueueService:
         ] or None
         added = 0
 
-        for composer in composers:
+        for seed in seed_list:
             if len(queue) >= target_size:
                 break
             need = target_size - len(queue)
@@ -428,8 +428,7 @@ class QueueService:
 
             # Fast path: already-mapped songs (youtube_video_id present).
             mapped = await self.songs_library.sample(
-                composer=composer,
-                seed=composer,
+                seed=seed,
                 year_from=year_from,
                 year_to=year_to,
                 popularity_min=popularity_min,
@@ -445,8 +444,7 @@ class QueueService:
             if len(lib_songs) < need:
                 exclude_ids = [s.id for s in lib_songs if s.id]
                 unmapped_pool = await self.songs_library.sample(
-                    composer=composer,
-                    seed=composer,
+                    seed=seed,
                     year_from=year_from,
                     year_to=year_to,
                     popularity_min=popularity_min,
@@ -463,31 +461,18 @@ class QueueService:
                     need=need,
                 )
 
-            if len(lib_songs) < LIBRARY_POOL_LOW and composer:
-                # Catalog thin for this seed — queue continuous discovery (best-effort).
-                await self.songs_library.discover([composer])
-                more_mapped = await self.songs_library.sample(
-                    composer=composer,
-                    seed=composer,
-                    year_from=year_from,
-                    year_to=year_to,
-                    popularity_min=popularity_min,
-                    popularity_max=popularity_max,
-                    languages=lang_filter,
-                    exclude_hashes=exclude_hashes,
-                    exclude_ids=[s.id for s in lib_songs if s.id],
-                    only_mapped=True,
-                    limit=pool_limit,
+            # Discover only when the catalog has zero songs for this seed
+            # (any field). Heard/excluded songs do not count as "missing".
+            if seed:
+                catalog_hit = await self.songs_library.sample(
+                    seed=seed,
+                    only_mapped=False,
+                    limit=1,
                 )
-                if more_mapped:
-                    lib_songs = await self._ensure_library_youtube_ids(
-                        lib_songs + more_mapped,
-                        need=need,
-                    )
-                elif len(lib_songs) < need:
-                    more = await self.songs_library.sample(
-                        composer=composer,
-                        seed=composer,
+                if not catalog_hit:
+                    await self.songs_library.discover([seed])
+                    more_mapped = await self.songs_library.sample(
+                        seed=seed,
                         year_from=year_from,
                         year_to=year_to,
                         popularity_min=popularity_min,
@@ -495,13 +480,31 @@ class QueueService:
                         languages=lang_filter,
                         exclude_hashes=exclude_hashes,
                         exclude_ids=[s.id for s in lib_songs if s.id],
-                        only_mapped=False,
+                        only_mapped=True,
                         limit=pool_limit,
                     )
-                    lib_songs = await self._ensure_library_youtube_ids(
-                        lib_songs + more,
-                        need=need,
-                    )
+                    if more_mapped:
+                        lib_songs = await self._ensure_library_youtube_ids(
+                            lib_songs + more_mapped,
+                            need=need,
+                        )
+                    elif len(lib_songs) < need:
+                        more = await self.songs_library.sample(
+                            seed=seed,
+                            year_from=year_from,
+                            year_to=year_to,
+                            popularity_min=popularity_min,
+                            popularity_max=popularity_max,
+                            languages=lang_filter,
+                            exclude_hashes=exclude_hashes,
+                            exclude_ids=[s.id for s in lib_songs if s.id],
+                            only_mapped=False,
+                            limit=pool_limit,
+                        )
+                        lib_songs = await self._ensure_library_youtube_ids(
+                            lib_songs + more,
+                            need=need,
+                        )
 
             for lib_song in lib_songs:
                 if len(queue) >= target_size:

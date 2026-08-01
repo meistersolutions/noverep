@@ -164,10 +164,16 @@ class SongsLibraryClient:
             logger.warning("songs_library_sample_failed", error=str(exc), seed=seed or composer)
             return []
 
-    async def discover(self, seeds: list[str], limit_per_seed: int | None = None) -> dict:
+    async def discover(
+        self,
+        seeds: list[str],
+        limit_per_seed: int | None = None,
+        *,
+        force: bool = False,
+    ) -> dict:
         if not self.enabled or not seeds:
             return {"results": [], "total_inserted": 0, "total_skipped": 0}
-        payload: dict = {"seeds": seeds}
+        payload: dict = {"seeds": seeds, "force": force}
         if limit_per_seed is not None:
             payload["limit_per_seed"] = limit_per_seed
         try:

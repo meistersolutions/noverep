@@ -76,6 +76,10 @@ class SongOut(BaseModel):
 class DiscoverRequest(BaseModel):
     seeds: list[str]
     limit_per_seed: int | None = None
+    force: bool = Field(
+        default=False,
+        description="Queue discovery even when the catalog already has matching songs.",
+    )
 
 
 class DiscoverSeedResult(BaseModel):

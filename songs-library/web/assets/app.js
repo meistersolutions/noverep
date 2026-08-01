@@ -643,6 +643,7 @@ async function discover() {
       body: JSON.stringify({
         seeds: [seed],
         limit_per_seed: 0,
+        force: true,
       }),
     });
     browsing = true;
