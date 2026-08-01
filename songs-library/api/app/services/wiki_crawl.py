@@ -301,6 +301,33 @@ def _apply_film_credits(
         w.setdefault("source", "wikipedia_bfs")
 
 
+def _recorded_by_performer(page_title: str) -> str | None:
+    """Extract performer from 'List of … songs recorded by X' hub titles."""
+    m = re.search(
+        r"(?:songs|film songs)\s+recorded\s+by\s+(.+)$",
+        page_title or "",
+        flags=re.I,
+    )
+    if not m:
+        return None
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", m.group(1)).strip()
+    return name or None
+
+
+def _annotate_recorded_by_singers(works: list[dict[str, Any]], page_title: str) -> None:
+    performer = _recorded_by_performer(page_title)
+    if not performer:
+        return
+    for w in works:
+        singers = list(w.get("singers") or [])
+        if performer not in singers:
+            singers.append(performer)
+        w["singers"] = singers
+        # These hubs are singer discographies — do not invent a composer.
+        if (w.get("composer_name") or "").casefold() == performer.casefold():
+            w["composer_name"] = None
+
+
 async def _resolve_enqueue_title(
     client: httpx.AsyncClient,
     raw: str,
@@ -430,6 +457,7 @@ async def crawl_seed_bfs(
                 page_works = wiki._tables_to_works(tables, page_title=page_title)
                 for w in page_works:
                     w.setdefault("source", "wikipedia_hub")
+                _annotate_recorded_by_singers(page_works, page_title)
                 # Filmography rows → film pages (title + year + language).
                 for film in wiki._tables_to_films(tables):
                     enqueue.append(

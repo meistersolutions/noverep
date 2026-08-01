@@ -100,3 +100,21 @@ def test_film_dedupe_keeps_same_title_year_different_language():
     assert len(films) == 2
     assert films[0]["language"] == "Tamil"
     assert films[1]["language"] == "Telugu"
+
+
+def test_recorded_by_hub_adds_singer_not_composer():
+    from app.services.wiki_crawl import _annotate_recorded_by_singers
+
+    works = [
+        {
+            "song_name": "O Priya",
+            "movie_name": "Geethanjali",
+            "singers": [],
+            "composer_name": None,
+        }
+    ]
+    _annotate_recorded_by_singers(
+        works, "List of Tamil songs recorded by K. J. Yesudas"
+    )
+    assert works[0]["singers"] == ["K. J. Yesudas"]
+    assert works[0]["composer_name"] is None

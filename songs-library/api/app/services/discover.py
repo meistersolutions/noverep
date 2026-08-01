@@ -17,12 +17,7 @@ def upsert_song(
     Returns (song, action) where action is inserted|skipped|updated.
     """
     composer = data.composer_name or composer_fallback
-    h = content_hash(
-        data.song_name,
-        data.movie_name,
-        release_year=data.release_year,
-        language=data.language,
-    )
+    h = content_hash(data.song_name, data.movie_name)
 
     existing = None
     if data.wikidata_id:
@@ -36,15 +31,26 @@ def upsert_song(
 
     if existing:
         changed = False
+        # Never replace a real composer with an empty/seed stamp.
         if composer and not existing.composer_name:
             existing.composer_name = composer
             changed = True
-        if data.singers and not (existing.singers or []):
-            existing.singers = list(data.singers)
-            changed = True
-        if data.lyricists and not (existing.lyricists or []):
-            existing.lyricists = list(data.lyricists)
-            changed = True
+        if data.singers:
+            merged = list(existing.singers or [])
+            for s in data.singers:
+                if s and s not in merged:
+                    merged.append(s)
+                    changed = True
+            if merged != (existing.singers or []):
+                existing.singers = merged
+        if data.lyricists:
+            merged = list(existing.lyricists or [])
+            for s in data.lyricists:
+                if s and s not in merged:
+                    merged.append(s)
+                    changed = True
+            if merged != (existing.lyricists or []):
+                existing.lyricists = merged
         if data.movie_name and not existing.movie_name:
             existing.movie_name = data.movie_name
             changed = True
@@ -65,10 +71,17 @@ def upsert_song(
             changed = True
         for field in ("directors", "actors", "actresses"):
             vals = getattr(data, field) or []
-            existing_vals = getattr(existing, field) or []
-            if vals and not existing_vals:
-                setattr(existing, field, list(vals))
-                changed = True
+            existing_vals = list(getattr(existing, field) or [])
+            for item in vals:
+                if item and item not in existing_vals:
+                    existing_vals.append(item)
+                    changed = True
+            if existing_vals != (getattr(existing, field) or []):
+                setattr(existing, field, existing_vals)
+        # Keep content_hash on the song|movie identity.
+        if existing.content_hash != h:
+            existing.content_hash = h
+            changed = True
         return existing, "updated" if changed else "skipped"
 
     song = Song(
@@ -99,12 +112,11 @@ def upsert_song(
     return song, "inserted"
 
 
-def _work_key(work: dict) -> tuple[str, str, str, str]:
+def _work_key(work: dict) -> tuple[str, str]:
+    """In-batch identity: same song+movie merges regardless of year/language."""
     return (
         (work.get("song_name") or "").strip().casefold(),
         (work.get("movie_name") or "").strip().casefold(),
-        str(work.get("release_year") or ""),
-        (work.get("language") or "").strip().casefold(),
     )
 
 

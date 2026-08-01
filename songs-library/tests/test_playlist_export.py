@@ -61,6 +61,5 @@ def test_export_playlist_mapped_only():
 
 
 def test_content_hash_matches_library():
-    assert content_hash("Test", "Movie", release_year=2000, language="Tamil") == content_hash(
-        "test", "movie", release_year=2000, language="tamil"
-    )
+    assert content_hash("Test", "Movie") == content_hash("test", "movie")
+

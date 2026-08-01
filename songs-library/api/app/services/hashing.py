@@ -21,18 +21,12 @@ def content_hash(
     release_year: int | None = None,
     language: str | None = None,
 ) -> str:
-    """Dedupe fingerprint: song + movie + year + language.
+    """Dedupe fingerprint: song + movie only.
 
-    ``composer_name`` is accepted for call-site compatibility but ignored.
-    Missing year/language become empty segments (still keep the ``|``).
+    Year/language/composer are accepted for call-site compatibility but ignored —
+    they enrich existing rows instead of creating duplicates when the same
+    title+film is rediscovered from another seed (e.g. singer vs composer).
     """
-    del composer_name
-    payload = "|".join(
-        [
-            _norm(song_name),
-            _norm(movie_name),
-            str(release_year or ""),
-            _norm(language),
-        ]
-    )
+    del composer_name, release_year, language
+    payload = "|".join([_norm(song_name), _norm(movie_name)])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
