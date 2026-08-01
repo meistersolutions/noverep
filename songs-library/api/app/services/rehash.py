@@ -28,6 +28,13 @@ def _pick_keeper(rows: list[Song]) -> Song:
 
 
 def _merge_into(keeper: Song, donor: Song) -> None:
+    # Clear unique external ids on donor first so keeper can inherit them
+    # without violating unique constraints mid-flush.
+    donor_mb = donor.musicbrainz_id
+    donor_wd = donor.wikidata_id
+    donor.musicbrainz_id = None
+    donor.wikidata_id = None
+
     if donor.composer_name and not keeper.composer_name:
         keeper.composer_name = donor.composer_name
     if donor.movie_name and not keeper.movie_name:
@@ -36,10 +43,10 @@ def _merge_into(keeper: Song, donor: Song) -> None:
         keeper.release_year = donor.release_year
     if donor.language and not keeper.language:
         keeper.language = donor.language
-    if donor.wikidata_id and not keeper.wikidata_id:
-        keeper.wikidata_id = donor.wikidata_id
-    if donor.musicbrainz_id and not keeper.musicbrainz_id:
-        keeper.musicbrainz_id = donor.musicbrainz_id
+    if donor_wd and not keeper.wikidata_id:
+        keeper.wikidata_id = donor_wd
+    if donor_mb and not keeper.musicbrainz_id:
+        keeper.musicbrainz_id = donor_mb
     if donor.youtube_video_id and not keeper.youtube_video_id:
         keeper.youtube_video_id = donor.youtube_video_id
         keeper.playability = "mapped"
@@ -100,6 +107,7 @@ def rehash_all_songs(db: Session) -> dict[str, int]:
             if donor.id == keeper.id:
                 continue
             _merge_into(keeper, donor)
+            db.flush()  # apply cleared unique ids before delete/reassign
             db.delete(donor)
             deleted += 1
 
