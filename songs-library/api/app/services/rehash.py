@@ -27,13 +27,14 @@ def _pick_keeper(rows: list[Song]) -> Song:
     return sorted(rows, key=score, reverse=True)[0]
 
 
-def _merge_into(keeper: Song, donor: Song) -> None:
-    # Clear unique external ids on donor first so keeper can inherit them
-    # without violating unique constraints mid-flush.
+def _merge_into(db: Session, keeper: Song, donor: Song) -> None:
+    """Merge donor into keeper; never copy unique ids that would collide."""
     donor_mb = donor.musicbrainz_id
     donor_wd = donor.wikidata_id
+    # Release unique keys on donor before keeper inherits them.
     donor.musicbrainz_id = None
     donor.wikidata_id = None
+    db.flush()
 
     if donor.composer_name and not keeper.composer_name:
         keeper.composer_name = donor.composer_name
@@ -62,6 +63,7 @@ def _merge_into(keeper: Song, donor: Song) -> None:
         setattr(keeper, field, existing)
     if (donor.popularity or 0) > (keeper.popularity or 0):
         keeper.popularity = donor.popularity
+    db.flush()
 
 
 def rehash_all_songs(db: Session) -> dict[str, int]:
@@ -106,9 +108,9 @@ def rehash_all_songs(db: Session) -> dict[str, int]:
         for donor in rows:
             if donor.id == keeper.id:
                 continue
-            _merge_into(keeper, donor)
-            db.flush()  # apply cleared unique ids before delete/reassign
+            _merge_into(db, keeper, donor)
             db.delete(donor)
+            db.flush()
             deleted += 1
 
     db.commit()
