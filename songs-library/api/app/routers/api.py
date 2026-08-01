@@ -93,8 +93,37 @@ def stats(db: Session = Depends(get_db)):
 
 
 @router.post("/maintenance/rehash-content-hashes", response_model=RehashResultOut)
-def maintenance_rehash_content_hashes(db: Session = Depends(get_db)):
-    """Regenerate content_hash (song|movie|year|language) and merge collisions."""
+def maintenance_rehash_content_hashes(
+    background: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """Regenerate content_hash (song|movie) and merge collisions.
+
+    Pass ``?background=true`` to run after the HTTP response (avoids proxy timeouts).
+    """
+    if background:
+        from app.db import SessionLocal
+
+        def _run() -> None:
+            session = SessionLocal()
+            try:
+                rehash_all_songs(session)
+            except Exception:  # noqa: BLE001
+                session.rollback()
+            finally:
+                session.close()
+
+        import threading
+
+        threading.Thread(target=_run, daemon=True).start()
+        total = db.query(func.count(Song.id)).scalar() or 0
+        return RehashResultOut(
+            loaded=int(total),
+            hash_values_changed=-1,
+            collision_groups=-1,
+            merged_deleted=-1,
+            remaining=int(total),
+        )
     try:
         result = rehash_all_songs(db)
     except Exception as exc:  # noqa: BLE001

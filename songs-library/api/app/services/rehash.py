@@ -27,14 +27,7 @@ def _pick_keeper(rows: list[Song]) -> Song:
     return sorted(rows, key=score, reverse=True)[0]
 
 
-def _merge_into(db: Session, keeper: Song, donor: Song) -> None:
-    """Merge donor into keeper; never copy unique ids that would collide."""
-    donor_mb = donor.musicbrainz_id
-    donor_wd = donor.wikidata_id
-    donor.musicbrainz_id = None
-    donor.wikidata_id = None
-    db.flush()
-
+def _merge_fields(keeper: Song, donor: Song) -> None:
     if donor.composer_name and not keeper.composer_name:
         keeper.composer_name = donor.composer_name
     if donor.movie_name and not keeper.movie_name:
@@ -43,10 +36,6 @@ def _merge_into(db: Session, keeper: Song, donor: Song) -> None:
         keeper.release_year = donor.release_year
     if donor.language and not keeper.language:
         keeper.language = donor.language
-    if donor_wd and not keeper.wikidata_id:
-        keeper.wikidata_id = donor_wd
-    if donor_mb and not keeper.musicbrainz_id:
-        keeper.musicbrainz_id = donor_mb
     if donor.youtube_video_id and not keeper.youtube_video_id:
         keeper.youtube_video_id = donor.youtube_video_id
         keeper.playability = "mapped"
@@ -62,17 +51,10 @@ def _merge_into(db: Session, keeper: Song, donor: Song) -> None:
         setattr(keeper, field, existing)
     if (donor.popularity or 0) > (keeper.popularity or 0):
         keeper.popularity = donor.popularity
-    db.flush()
 
 
 def rehash_all_songs(db: Session) -> dict[str, int]:
-    """Recompute content_hash (song|movie) for every song; merge collisions.
-
-    Order matters for the unique index:
-    1) Move every row onto a temporary unique hash
-    2) Merge/delete duplicate groups while still on temps
-    3) Assign the final song|movie hash once per survivor
-    """
+    """Recompute content_hash (song|movie); merge collisions with few flushes."""
     songs = db.query(Song).all()
     loaded = len(songs)
 
@@ -88,9 +70,9 @@ def rehash_all_songs(db: Session) -> dict[str, int]:
         song.content_hash = f"tmp-{song.id}"
     db.flush()
 
-    deleted = 0
-    collision_groups = 0
     survivors: dict[str, Song] = {}
+    pairs: list[tuple[Song, Song, str | None, str | None]] = []
+    collision_groups = 0
     for new_h, rows in by_hash.items():
         if len(rows) == 1:
             survivors[new_h] = rows[0]
@@ -101,10 +83,21 @@ def rehash_all_songs(db: Session) -> dict[str, int]:
         for donor in rows:
             if donor.id == keeper.id:
                 continue
-            _merge_into(db, keeper, donor)
-            db.delete(donor)
-            deleted += 1
-        db.flush()
+            pairs.append((keeper, donor, donor.musicbrainz_id, donor.wikidata_id))
+            donor.musicbrainz_id = None
+            donor.wikidata_id = None
+    db.flush()
+
+    deleted = 0
+    for keeper, donor, donor_mb, donor_wd in pairs:
+        _merge_fields(keeper, donor)
+        if donor_wd and not keeper.wikidata_id:
+            keeper.wikidata_id = donor_wd
+        if donor_mb and not keeper.musicbrainz_id:
+            keeper.musicbrainz_id = donor_mb
+        db.delete(donor)
+        deleted += 1
+    db.flush()
 
     for new_h, song in survivors.items():
         song.content_hash = new_h
