@@ -19,12 +19,20 @@ def content_hash(
     movie_name: str | None = None,
     composer_name: str | None = None,
     release_year: int | None = None,
+    language: str | None = None,
 ) -> str:
-    """Dedupe fingerprint from title + movie only.
+    """Dedupe fingerprint: song + movie + year + language.
 
-    ``composer_name`` and ``release_year`` are accepted for call-site
-    compatibility but ignored.
+    ``composer_name`` is accepted for call-site compatibility but ignored.
+    Missing year/language become empty segments (still keep the ``|``).
     """
-    del composer_name, release_year
-    payload = "|".join([_norm(song_name), _norm(movie_name)])
+    del composer_name
+    payload = "|".join(
+        [
+            _norm(song_name),
+            _norm(movie_name),
+            str(release_year or ""),
+            _norm(language),
+        ]
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

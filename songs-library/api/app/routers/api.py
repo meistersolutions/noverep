@@ -206,8 +206,13 @@ def update_song(song_id: str, body: SongUpdate, db: Session = Depends(get_db)):
     data = body.model_dump(exclude_unset=True)
     for key, value in data.items():
         setattr(song, key, value)
-    if any(k in data for k in ("song_name", "movie_name")):
-        song.content_hash = content_hash(song.song_name, song.movie_name)
+    if any(k in data for k in ("song_name", "movie_name", "release_year", "language")):
+        song.content_hash = content_hash(
+            song.song_name,
+            song.movie_name,
+            release_year=song.release_year,
+            language=song.language,
+        )
     if song.youtube_video_id and song.playability == "metadata_only":
         song.playability = "mapped"
     db.commit()

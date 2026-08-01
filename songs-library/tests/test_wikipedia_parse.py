@@ -97,7 +97,7 @@ def test_film_name_column_extracts_filmography_rows():
     parser.feed(FILM_NAME_DISCOGRAPHY)
     films = _tables_to_films(parser.tables)
     assert len(films) == 3
-    assert films[0] == {"film": "Panam", "year": 1952}
+    assert films[0] == {"film": "Panam", "year": 1952, "language": None}
     assert films[1]["film"] == "Rathinapuri Ilavarasi"
     assert films[2]["year"] == 1970
 

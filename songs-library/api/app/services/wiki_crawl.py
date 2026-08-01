@@ -113,6 +113,7 @@ def extract_infobox_credits(html: str) -> dict[str, Any]:
         "actors": [],
         "actresses": [],
         "release_year": None,
+        "language": None,
     }
     # Prefer the first infobox table.
     m = re.search(
@@ -144,6 +145,10 @@ def extract_infobox_credits(html: str) -> dict[str, Any]:
             credits["actors"] = _split_credit_names(value_text)
         elif label in {"release date", "released", "release dates"}:
             credits["release_year"] = wiki._year_from_heading(value_text)
+        elif label in {"language", "languages"}:
+            langs = _split_credit_names(value_text)
+            if langs:
+                credits["language"] = langs[0]
     return credits
 
 
@@ -196,7 +201,9 @@ def extract_content_wiki_links(html: str) -> list[str]:
     return titles
 
 
-def film_page_candidates(film: str, year: int | None) -> list[str]:
+def film_page_candidates(
+    film: str, year: int | None, language: str | None = None
+) -> list[str]:
     """Ordered Wikipedia titles to try for a filmography row."""
     name = (film or "").strip()
     if not name:
@@ -204,6 +211,10 @@ def film_page_candidates(film: str, year: int | None) -> list[str]:
     out: list[str] = []
     if year:
         out.append(f"{name} ({year} film)")
+        if language:
+            # Some articles use language in the disambiguator.
+            out.append(f"{name} ({year} {language} film)")
+            out.append(f"{name} ({language} film)")
     out.append(name)
     if year:
         out.append(f"{name} ({year})")
@@ -266,7 +277,13 @@ def _seed_tokens(seed: str) -> list[str]:
     return [t for t in re.split(r"\W+", seed.casefold()) if t]
 
 
-def _apply_film_credits(works: list[dict[str, Any]], credits: dict[str, Any], movie_name: str | None) -> None:
+def _apply_film_credits(
+    works: list[dict[str, Any]],
+    credits: dict[str, Any],
+    movie_name: str | None,
+    *,
+    language: str | None = None,
+) -> None:
     for w in works:
         if movie_name and not w.get("movie_name"):
             w["movie_name"] = movie_name
@@ -274,6 +291,9 @@ def _apply_film_credits(works: list[dict[str, Any]], credits: dict[str, Any], mo
             w["composer_name"] = credits["composer_name"]
         if credits.get("release_year") and not w.get("release_year"):
             w["release_year"] = credits["release_year"]
+        lang = language or credits.get("language")
+        if lang and not w.get("language"):
+            w["language"] = lang
         for field in ("directors", "actors", "actresses"):
             vals = credits.get(field) or []
             if vals and not (w.get(field) or []):
@@ -282,21 +302,29 @@ def _apply_film_credits(works: list[dict[str, Any]], credits: dict[str, Any], mo
 
 
 async def _resolve_enqueue_title(
-    client: httpx.AsyncClient, raw: str, year: int | None = None
+    client: httpx.AsyncClient,
+    raw: str,
+    year: int | None = None,
+    language: str | None = None,
 ) -> str | None:
-    for candidate in film_page_candidates(raw, year):
+    for candidate in film_page_candidates(raw, year, language):
         resolved = await wiki._page_exists(client, candidate)
         if resolved:
             # Prefer real film pages over disambiguation.
             if "(disambiguation)" in resolved.casefold():
                 continue
             return resolved
+    search = raw
+    if year:
+        search = f"{raw} {year}"
+    if language:
+        search = f"{search} {language}"
     data = await wiki._wiki_get(
         client,
         {
             "action": "opensearch",
-            "search": f"{raw} {year}" if year else raw,
-            "limit": 5,
+            "search": search,
+            "limit": 8,
             "format": "json",
         },
     )
@@ -365,7 +393,9 @@ async def crawl_seed_bfs(
             kind = classify_page(page_title, html)
             pages_done += 1
             page_works: list[dict[str, Any]] = []
-            enqueue: list[tuple[str, int | None]] = []  # (title_or_film, year)
+            # (title_or_film, year, language)
+            enqueue: list[tuple[str, int | None, str | None]] = []
+            hint_language = (item.get("language") or None)
 
             if kind == "film":
                 if page_title not in film_pages:
@@ -373,47 +403,50 @@ async def crawl_seed_bfs(
                 credits = extract_infobox_credits(html)
                 page_works = wiki._tables_to_works(tables, page_title=page_title)
                 movie_name = re.sub(r"\s*\([^)]*film\)\s*$", "", page_title, flags=re.I).strip()
-                _apply_film_credits(page_works, credits, movie_name)
+                _apply_film_credits(
+                    page_works, credits, movie_name, language=hint_language
+                )
                 for link in wiki._extract_soundtrack_page_links(html):
-                    enqueue.append((link, None))
-                # Also enqueue soundtrack-looking content links.
+                    enqueue.append((link, None, hint_language))
                 for link in extract_content_wiki_links(html):
                     if "soundtrack" in link.casefold():
-                        enqueue.append((link, None))
+                        enqueue.append((link, None, hint_language))
 
             elif kind == "soundtrack":
                 credits = extract_infobox_credits(html)
                 page_works = wiki._tables_to_works(tables, page_title=page_title)
-                # Infer movie from "X (soundtrack)" title.
                 movie_name = re.sub(
                     r"\s*\([^)]*soundtrack\)\s*$", "", page_title, flags=re.I
                 ).strip()
-                _apply_film_credits(page_works, credits, movie_name or None)
+                _apply_film_credits(
+                    page_works, credits, movie_name or None, language=hint_language
+                )
                 for w in page_works:
                     w["source"] = "wikipedia_soundtrack"
 
             elif kind in ("hub", "person", "other"):
                 if kind == "hub" and page_title not in hub_pages:
                     hub_pages.append(page_title)
-                # Songs already listed on hub pages.
                 page_works = wiki._tables_to_works(tables, page_title=page_title)
                 for w in page_works:
                     w.setdefault("source", "wikipedia_hub")
-                # Filmography / discography rows → film pages (title+year).
+                # Filmography rows → film pages (title + year + language).
                 for film in wiki._tables_to_films(tables):
-                    enqueue.append((film["film"], film.get("year")))
+                    enqueue.append(
+                        (film["film"], film.get("year"), film.get("language"))
+                    )
                 for link in wiki._extract_main_article_links(html):
                     if is_enqueue_worthy(link, seed_tokens=tokens):
-                        enqueue.append((link, None))
+                        enqueue.append((link, None, None))
                 for link in extract_content_wiki_links(html):
                     if is_enqueue_worthy(link, seed_tokens=tokens):
-                        enqueue.append((link, None))
+                        enqueue.append((link, None, None))
 
             works.extend(page_works)
 
             # Resolve and push new links.
             if depth < (max_depth if max_depth is not None else 10**9):
-                for raw, year in enqueue:
+                for raw, year, language in enqueue:
                     if not raw:
                         continue
                     # Hub/soundtrack titles can enqueue directly when already wiki-shaped.
@@ -426,9 +459,17 @@ async def crawl_seed_bfs(
                         if key not in seen and not any(
                             (q.get("title") or "").casefold() == key for q in queue
                         ):
-                            queue.append({"title": raw, "depth": depth + 1})
+                            queue.append(
+                                {
+                                    "title": raw,
+                                    "depth": depth + 1,
+                                    "language": language,
+                                }
+                            )
                         continue
-                    resolved = await _resolve_enqueue_title(client, raw, year)
+                    resolved = await _resolve_enqueue_title(
+                        client, raw, year, language
+                    )
                     if not resolved:
                         continue
                     key = resolved.casefold()
@@ -436,7 +477,13 @@ async def crawl_seed_bfs(
                         continue
                     if any((q.get("title") or "").casefold() == key for q in queue):
                         continue
-                    queue.append({"title": resolved, "depth": depth + 1})
+                    queue.append(
+                        {
+                            "title": resolved,
+                            "depth": depth + 1,
+                            "language": language,
+                        }
+                    )
                     await asyncio.sleep(0.05)
 
             state = {

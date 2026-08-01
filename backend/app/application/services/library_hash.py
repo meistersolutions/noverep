@@ -23,8 +23,16 @@ def library_content_hash(
     movie_name: str | None = None,
     composer_name: str | None = None,
     release_year: int | None = None,
+    language: str | None = None,
 ) -> str:
-    """Dedupe fingerprint from title + movie only (matches Songs Library)."""
-    del composer_name, release_year
-    payload = "|".join([_norm(song_name), _norm(movie_name)])
+    """Dedupe fingerprint: song + movie + year + language (matches Songs Library)."""
+    del composer_name
+    payload = "|".join(
+        [
+            _norm(song_name),
+            _norm(movie_name),
+            str(release_year or ""),
+            _norm(language),
+        ]
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

@@ -305,6 +305,7 @@ def _tables_to_films(
         film_i = None
         year_i = None
         songs_flag_i = None
+        language_i = None
         for i, h in enumerate(headers):
             if film_i is None and _is_film_column_header(h):
                 # Prefer explicit film/movie columns over a bare "title".
@@ -315,6 +316,8 @@ def _tables_to_films(
                 year_i = i
             if songs_flag_i is None and h in ("songs", "song"):
                 songs_flag_i = i
+            if language_i is None and h in ("language", "lang"):
+                language_i = i
         if film_i is None:
             continue
 
@@ -344,12 +347,15 @@ def _tables_to_films(
             year = default_year
             if year_i is not None and year_i < len(row):
                 year = _year_from_heading(row[year_i]) or year
-            # Title + year so Geethanjali (1981 album) ≠ Geethanjali (1989 film).
-            key = f"{name.casefold()}|{year or ''}"
+            language = None
+            if language_i is not None and language_i < len(row) and row[language_i].strip():
+                language = row[language_i].strip()
+            # Title + year + language (same title/year in Tamil vs Telugu stay distinct).
+            key = f"{name.casefold()}|{year or ''}|{(language or '').casefold()}"
             if key in seen:
                 continue
             seen.add(key)
-            films.append({"film": name, "year": year})
+            films.append({"film": name, "year": year, "language": language})
     return films
 
 
@@ -584,7 +590,8 @@ async def list_composer_films(
         name = (f.get("film") or "").strip()
         if not name:
             continue
-        key = f"{name.casefold()}|{f.get('year') or ''}"
+        lang = (f.get("language") or "").strip()
+        key = f"{name.casefold()}|{f.get('year') or ''}|{lang.casefold()}"
         if key in seen:
             continue
         seen.add(key)

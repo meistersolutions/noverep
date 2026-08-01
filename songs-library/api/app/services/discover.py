@@ -17,7 +17,12 @@ def upsert_song(
     Returns (song, action) where action is inserted|skipped|updated.
     """
     composer = data.composer_name or composer_fallback
-    h = content_hash(data.song_name, data.movie_name)
+    h = content_hash(
+        data.song_name,
+        data.movie_name,
+        release_year=data.release_year,
+        language=data.language,
+    )
 
     existing = None
     if data.wikidata_id:
@@ -94,10 +99,12 @@ def upsert_song(
     return song, "inserted"
 
 
-def _work_key(work: dict) -> tuple[str, str]:
+def _work_key(work: dict) -> tuple[str, str, str, str]:
     return (
         (work.get("song_name") or "").strip().casefold(),
         (work.get("movie_name") or "").strip().casefold(),
+        str(work.get("release_year") or ""),
+        (work.get("language") or "").strip().casefold(),
     )
 
 

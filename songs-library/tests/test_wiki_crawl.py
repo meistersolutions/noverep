@@ -81,6 +81,22 @@ def test_film_dedupe_keeps_same_title_different_years():
     parser.feed(html)
     films = _tables_to_films(parser.tables)
     assert films == [
-        {"film": "Geethanjali", "year": 1981},
-        {"film": "Geethanjali", "year": 1989},
+        {"film": "Geethanjali", "year": 1981, "language": "Tamil"},
+        {"film": "Geethanjali", "year": 1989, "language": "Telugu"},
     ]
+
+
+def test_film_dedupe_keeps_same_title_year_different_language():
+    html = """
+    <table class="wikitable">
+    <tr><th>Year</th><th>Film</th><th>Language</th></tr>
+    <tr><td>1989</td><td>Geethanjali</td><td>Tamil</td></tr>
+    <tr><td>1989</td><td>Geethanjali</td><td>Telugu</td></tr>
+    </table>
+    """
+    parser = _WikiPageParser()
+    parser.feed(html)
+    films = _tables_to_films(parser.tables)
+    assert len(films) == 2
+    assert films[0]["language"] == "Tamil"
+    assert films[1]["language"] == "Telugu"
