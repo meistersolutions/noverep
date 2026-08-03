@@ -32,7 +32,7 @@ services:
       - key: SONGS_LIBRARY_ENABLED
         value: "true"
       - key: SONGS_LIBRARY_KEEPALIVE_SECONDS
-        value: "60"
+        value: "300"
 
   - type: web
     name: noverep
@@ -68,7 +68,12 @@ services:
       - key: YOUTUBE_COOKIES_B64
         sync: false
       # Mutual keepalive with NoRepeat (once either service is awake, keep both up).
+      # Keep interval long — short keepalive + always-on workers burned Neon Free
+      # 5 GB/month transfer in a few days.
       - key: NOREPEAT_KEEPALIVE_URL
         value: https://noverep-api.onrender.com/health
       - key: NOREPEAT_KEEPALIVE_SECONDS
-        value: "60"
+        value: "300"
+      # Set false temporarily if Neon transfer is exhausted / recovering.
+      - key: BACKGROUND_WORKERS_ENABLED
+        value: "true"

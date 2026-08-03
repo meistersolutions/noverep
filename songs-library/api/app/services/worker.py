@@ -302,7 +302,7 @@ async def discover_queue_loop(stop_event: asyncio.Event) -> None:
         if job_id:
             await run_discover_job(job_id)
         else:
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(max(5.0, float(settings.discover_queue_idle_seconds)))
 
 
 async def noverep_keepalive_loop(stop_event: asyncio.Event) -> None:
@@ -315,7 +315,7 @@ async def noverep_keepalive_loop(stop_event: asyncio.Event) -> None:
     url = (settings.noverep_keepalive_url or "").strip()
     if not url:
         return
-    interval = max(30.0, float(settings.noverep_keepalive_seconds))
+    interval = max(60.0, float(settings.noverep_keepalive_seconds))
     log.info("noverep_keepalive_started url=%s interval=%s", url, interval)
     while not stop_event.is_set():
         try:
@@ -338,6 +338,13 @@ _tasks: list[asyncio.Task] = []
 def start_background_workers() -> None:
     global _stop, _tasks
     if _tasks:
+        return
+    if not settings.background_workers_enabled:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "background_workers_disabled — set BACKGROUND_WORKERS_ENABLED=true to resume"
+        )
         return
     _stop = asyncio.Event()
     _tasks = [

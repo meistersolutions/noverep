@@ -4,11 +4,26 @@
 
 1. Go to https://console.neon.tech and sign in.
 2. Create a project, e.g. `songs-library` (or a second database in your existing Neon project).
-3. Copy the connection string. Prefer the **pooled** URL if Neon shows one.
+3. Copy the connection string. Prefer the **pooled** URL if Neon shows one  
+   (host contains `-pooler`, e.g. `ep-xxxx-pooler.region.aws.neon.tech`).
 4. It should look like:
-   `postgresql://user:pass@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require`
+   `postgresql://user:pass@ep-xxxx-pooler.region.aws.neon.tech/neondb?sslmode=require`
 
 Do **not** reuse the NoRepeat database — keep catalogs separate.
+
+### Neon Free plan warning (network transfer)
+
+Neon Free includes only **~5 GB/month public network transfer**. Continuous
+background workers + fat API responses can exhaust that in a few days and
+**suspend the compute** (data is kept; queries fail until the monthly reset or
+you upgrade).
+
+If suspended:
+1. Wait for the monthly reset, **or** upgrade the Neon project.
+2. On Render `songs-library`, set `BACKGROUND_WORKERS_ENABLED=false` until the
+   DB is reachable again, then redeploy with workers on after confirming the
+   pooled URL.
+3. Prefer Launch plan if you run discovery/enrich continuously.
 
 ## 2. Push this branch / merge to GitHub
 

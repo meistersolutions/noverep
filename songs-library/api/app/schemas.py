@@ -115,11 +115,25 @@ class DiscoverJobOut(BaseModel):
     pages_done: int
     message: str | None = None
     error: str | None = None
-    cursor_json: dict | None = None
+    # Slim progress only — never ship fat cursor queue/seen over the wire (Neon egress).
+    film_index: int | None = None
+    films_total: int | None = None
+    queue_len: int | None = None
+    seen_len: int | None = None
+    wiki_list_page_count: int = 0
     created_at: datetime | None = None
     finished_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class DiscoverJobPagesOut(BaseModel):
+    """Fetched only when the portal opens job Details — not on every poll."""
+
+    id: str
+    wiki_list_pages: list[str] = Field(default_factory=list)
+    filmography_pages: list[str] = Field(default_factory=list)
+    film_pages: list[str] = Field(default_factory=list)
 
 
 class EnrichStatusOut(BaseModel):

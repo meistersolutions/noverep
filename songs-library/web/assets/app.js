@@ -360,8 +360,8 @@ async function loadBrowse(options = {}) {
 async function pollDiscoverJob(jobId) {
   for (let i = 0; i < 3600; i++) {
     const job = await api(`/api/discover/jobs/${jobId}`);
-    const filmProgress = job.cursor_json?.film_index
-      ? ` · film ${job.cursor_json.film_index}/${job.cursor_json.films_total || "?"}`
+    const filmProgress = job.films_total
+      ? ` · film ${job.film_index || 0}/${job.films_total}`
       : "";
     $("status").textContent =
       `${job.seed}: ${job.phase} — ${job.message || job.status}` +
@@ -369,13 +369,12 @@ async function pollDiscoverJob(jobId) {
       filmProgress;
     await refreshStats().catch(() => {});
     await refreshJobs().catch(() => {});
-    if (browsing) {
-      await loadBrowse().catch(() => {});
-    }
+    // Do NOT reload the full catalog every tick — major Neon egress source.
     if (job.status === "completed" || job.status === "failed" || job.status === "archived") {
+      if (browsing) await loadBrowse().catch(() => {});
       return job;
     }
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 5000));
   }
   throw new Error("Discover job timed out waiting for completion");
 }
@@ -404,26 +403,30 @@ function pageListHtml(pages, emptyLabel) {
     .join("")}</ul>`;
 }
 
-function openJobDetails(job) {
-  const cursor = job.cursor_json || {};
-  const listPages = cursor.wiki_list_pages || [];
-  const filmographyPages = cursor.filmography_pages || [];
-  const filmPages = cursor.film_pages || [];
+async function openJobDetails(job) {
   $("job-details-status").textContent = `${job.status} · ${job.phase}`;
   $("job-details-title").textContent = job.entity_label || job.seed;
   $("job-details-meta").textContent =
     `Seed “${job.seed}” · inserted ${job.inserted}, updated ${job.updated}, skipped ${job.skipped}` +
     (job.message ? ` · ${job.message}` : "");
-  $("job-details-body").innerHTML = `
-    <h3>Song list / discography pages</h3>
-    ${pageListHtml(listPages, "No Wikipedia list pages recorded yet for this seed.")}
-    <h3>Filmography source pages</h3>
-    ${pageListHtml(filmographyPages, "No filmography pages recorded yet.")}
-    <h3>Film pages scanned for soundtracks</h3>
-    ${pageListHtml(filmPages, "No film soundtrack pages recorded yet.")}
-    ${job.error ? `<h3>Error</h3><p class="meta">${escapeHtml(job.error)}</p>` : ""}
-  `;
+  $("job-details-body").innerHTML = `<p class="meta">Loading Wikipedia pages…</p>`;
   $("job-details").showModal();
+  try {
+    const pages = await api(`/api/discover/jobs/${encodeURIComponent(job.id)}/pages`);
+    $("job-details-body").innerHTML = `
+      <h3>Song list / discography pages</h3>
+      ${pageListHtml(pages.wiki_list_pages || [], "No Wikipedia list pages recorded yet for this seed.")}
+      <h3>Filmography source pages</h3>
+      ${pageListHtml(pages.filmography_pages || [], "No filmography pages recorded yet.")}
+      <h3>Film pages scanned for soundtracks</h3>
+      ${pageListHtml(pages.film_pages || [], "No film soundtrack pages recorded yet.")}
+      ${job.error ? `<h3>Error</h3><p class="meta">${escapeHtml(job.error)}</p>` : ""}
+    `;
+  } catch (err) {
+    $("job-details-body").innerHTML =
+      `<p class="meta">${escapeHtml(err.message || String(err))}</p>` +
+      (job.error ? `<h3>Error</h3><p class="meta">${escapeHtml(job.error)}</p>` : "");
+  }
 }
 
 function renderJobs(jobs) {
@@ -436,13 +439,13 @@ function renderJobs(jobs) {
     .map((job) => {
       const label = job.entity_label || job.seed;
       const filmProgress =
-        job.cursor_json?.films_total
-          ? ` · film ${job.cursor_json.film_index || 0}/${job.cursor_json.films_total}`
+        job.films_total
+          ? ` · film ${job.film_index || 0}/${job.films_total}`
           : "";
-      const pages = (job.cursor_json?.wiki_list_pages || []).length;
+      const pages = job.wiki_list_page_count || 0;
       const active = job.status === "pending" || job.status === "running";
       const canResume = job.status !== "archived";
-      const filmIndex = job.cursor_json?.film_index || 0;
+      const filmIndex = job.film_index || 0;
       const resumeLabel =
         job.status === "running" || job.status === "pending"
           ? filmIndex > 0
@@ -593,7 +596,7 @@ function startWorkersPolling() {
   if (workersPollTimer) return;
   workersPollTimer = setInterval(() => {
     refreshWorkers().catch(() => {});
-  }, 15000);
+  }, 60000);
 }
 
 async function runResolveBatch() {
@@ -621,7 +624,7 @@ function startJobsPolling() {
   if (jobsPollTimer) return;
   jobsPollTimer = setInterval(() => {
     refreshJobs().catch(() => {});
-  }, 4000);
+  }, 15000);
 }
 
 async function discover() {

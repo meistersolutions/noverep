@@ -8,6 +8,7 @@ from app.db import get_db
 from app.models import DiscoverJob, Song
 from app.schemas import (
     DiscoverJobOut,
+    DiscoverJobPagesOut,
     DiscoverRequest,
     DiscoverResponse,
     DiscoverSeedResult,
@@ -27,6 +28,7 @@ from app.schemas import (
 )
 from app.services.discover import discover_many, upsert_song
 from app.services.hashing import content_hash
+from app.services.job_serialize import serialize_discover_job, serialize_discover_job_pages
 from app.services.playlist_export import export_playlist
 from app.services.rehash import rehash_all_songs
 from app.services.seed_match import apply_seed_match, count_songs_for_seed
@@ -166,7 +168,7 @@ def list_songs(
     mood: str | None = None,
     year_from: int | None = None,
     year_to: int | None = None,
-    limit: int = Query(default=50, ge=1, le=2000),
+    limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
@@ -325,19 +327,28 @@ def discover_job(job_id: str, db: Session = Depends(get_db)):
     job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
     if not job:
         raise HTTPException(404, "Discover job not found")
-    return job
+    return serialize_discover_job(job)
+
+
+@router.get("/discover/jobs/{job_id}/pages", response_model=DiscoverJobPagesOut)
+def discover_job_pages(job_id: str, db: Session = Depends(get_db)):
+    """Wikipedia page lists for the Details modal — not included in poll payloads."""
+    job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
+    if not job:
+        raise HTTPException(404, "Discover job not found")
+    return serialize_discover_job_pages(job)
 
 
 @router.post("/discover/jobs/{job_id}/end", response_model=DiscoverJobOut)
 def end_and_archive_discover_job(
     job_id: str, db: Session = Depends(get_db)
-) -> DiscoverJob:
+) -> DiscoverJobOut:
     """Stop a pending/running seed job and archive it off the home list."""
     job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
     if not job:
         raise HTTPException(404, "Discover job not found")
     if job.status == "archived":
-        return job
+        return serialize_discover_job(job)
     now = datetime.now(timezone.utc)
     was_active = job.status in {"pending", "running"}
     job.status = "archived"
@@ -351,7 +362,7 @@ def end_and_archive_discover_job(
         job.finished_at = now
     db.commit()
     db.refresh(job)
-    return job
+    return serialize_discover_job(job)
 
 
 @router.post("/discover/jobs/{job_id}/restart", response_model=DiscoverJobOut)
@@ -362,7 +373,7 @@ def restart_discover_job(
         description="If true, clear progress and start from scratch; else resume film crawl.",
     ),
     db: Session = Depends(get_db),
-) -> DiscoverJob:
+) -> DiscoverJobOut:
     """Re-queue a stuck/failed/completed seed so the background worker runs it again."""
     from app.services.worker import requeue_discover_job
 
@@ -371,7 +382,7 @@ def restart_discover_job(
         raise HTTPException(404, "Discover job not found")
     if job.status == "archived":
         raise HTTPException(400, "Archived jobs cannot be restarted; discover the seed again")
-    return requeue_discover_job(db, job, reset_progress=reset)
+    return serialize_discover_job(requeue_discover_job(db, job, reset_progress=reset))
 
 
 @router.get("/discover/jobs", response_model=list[DiscoverJobOut])
@@ -392,7 +403,7 @@ def list_discover_jobs(
         .all()
     )
     if active_only:
-        return active[:limit]
+        return [serialize_discover_job(j) for j in active[:limit]]
     remaining = max(limit - len(active), 0)
     recent: list[DiscoverJob] = []
     if remaining:
@@ -404,21 +415,88 @@ def list_discover_jobs(
         recent = (
             finished_q.order_by(DiscoverJob.created_at.desc()).limit(remaining).all()
         )
-    return active + recent
+    return [serialize_discover_job(j) for j in (active + recent)]
 
 
 @router.get("/enrich/status", response_model=EnrichStatusOut)
 def enrich_status(db: Session = Depends(get_db)):
-    songs = db.query(Song).all()
-    missing_singers = sum(1 for s in songs if not (s.singers or []))
-    missing_lyricists = sum(1 for s in songs if not (s.lyricists or []))
-    missing_either = sum(
-        1 for s in songs if not (s.singers or []) or not (s.lyricists or [])
-    )
+    """Counts only — never load the full catalog into memory/egress."""
+    from sqlalchemy import text
+
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        missing_singers = (
+            db.query(func.count(Song.id))
+            .filter(
+                or_(
+                    Song.singers.is_(None),
+                    Song.singers == [],
+                    Song.singers == "[]",
+                )
+            )
+            .scalar()
+            or 0
+        )
+        missing_lyricists = (
+            db.query(func.count(Song.id))
+            .filter(
+                or_(
+                    Song.lyricists.is_(None),
+                    Song.lyricists == [],
+                    Song.lyricists == "[]",
+                )
+            )
+            .scalar()
+            or 0
+        )
+        missing_either = (
+            db.query(func.count(Song.id))
+            .filter(
+                or_(
+                    Song.singers.is_(None),
+                    Song.singers == [],
+                    Song.singers == "[]",
+                    Song.lyricists.is_(None),
+                    Song.lyricists == [],
+                    Song.lyricists == "[]",
+                )
+            )
+            .scalar()
+            or 0
+        )
+    else:
+        missing_singers = (
+            db.execute(
+                text(
+                    "SELECT COUNT(*) FROM songs WHERE singers IS NULL "
+                    "OR singers::text IN ('[]', 'null')"
+                )
+            ).scalar()
+            or 0
+        )
+        missing_lyricists = (
+            db.execute(
+                text(
+                    "SELECT COUNT(*) FROM songs WHERE lyricists IS NULL "
+                    "OR lyricists::text IN ('[]', 'null')"
+                )
+            ).scalar()
+            or 0
+        )
+        missing_either = (
+            db.execute(
+                text(
+                    "SELECT COUNT(*) FROM songs WHERE "
+                    "singers IS NULL OR singers::text IN ('[]', 'null') "
+                    "OR lyricists IS NULL OR lyricists::text IN ('[]', 'null')"
+                )
+            ).scalar()
+            or 0
+        )
     return EnrichStatusOut(
-        missing_singers=missing_singers,
-        missing_lyricists=missing_lyricists,
-        missing_either=missing_either,
+        missing_singers=int(missing_singers),
+        missing_lyricists=int(missing_lyricists),
+        missing_either=int(missing_either),
     )
 
 

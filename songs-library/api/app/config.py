@@ -24,23 +24,29 @@ class Settings(BaseSettings):
     discover_max_depth: int = 4
     discover_queue_batch_commit: int = 5
     enrich_batch_size: int = 15
-    enrich_idle_seconds: float = 20.0
-    enrich_pause_seconds: float = 2.0
+    # Idle sleeps are intentionally long — continuous workers were the main Neon
+    # egress driver on the Free 5 GB/month transfer cap.
+    enrich_idle_seconds: float = 300.0
+    enrich_pause_seconds: float = 5.0
     youtube_resolve_limit: int = 20
     youtube_resolve_batch_size: int = 10
-    youtube_resolve_idle_seconds: float = 30.0
-    youtube_resolve_pause_seconds: float = 5.0
+    youtube_resolve_idle_seconds: float = 300.0
+    youtube_resolve_pause_seconds: float = 15.0
     # Extra sleep after YouTube 403/bot blocks (multiplied by consecutive failures).
     youtube_resolve_403_cooldown_seconds: float = 120.0
+    discover_queue_idle_seconds: float = 30.0
+    # Set BACKGROUND_WORKERS_ENABLED=false on Render to stop all DB loops
+    # (use when Neon transfer is exhausted / recovering).
+    background_workers_enabled: bool = True
     # Prefer official Data API search on Render (yt-dlp often gets 403 there).
     youtube_api_key: str = ""
     youtube_cookies: str = ""
     youtube_cookies_b64: str = ""
     youtube_cookies_file: str = ""
     # Optional: ping NoRepeat so mutual keepalive keeps both free-tier services awake
-    # once either one is woken by a user request.
+    # once either one is woken by a user request. Long interval reduces wake churn.
     noverep_keepalive_url: str = ""
-    noverep_keepalive_seconds: float = 60.0
+    noverep_keepalive_seconds: float = 300.0
     cors_origins: str = "*"
     port: int = 8100
 

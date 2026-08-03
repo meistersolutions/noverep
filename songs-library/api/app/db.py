@@ -20,7 +20,21 @@ def _normalize_database_url(url: str) -> str:
 
 DATABASE_URL = _normalize_database_url(settings.database_url)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
+# Small pool + pre-ping: one Render free dyno talking to Neon. Prefer Neon's
+# pooled connection string (*-pooler.*) in DATABASE_URL to cut connection churn.
+_engine_kwargs: dict = {"connect_args": connect_args}
+if not DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs.update(
+        {
+            "pool_size": 2,
+            "max_overflow": 1,
+            "pool_pre_ping": True,
+            "pool_recycle": 280,
+        }
+    )
+
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
