@@ -17,7 +17,7 @@ Standalone song catalog (API + browse UI) that grows via Wikipedia/Wikidata disc
 | content_hash | Dedupe fingerprint |
 | youtube_video_id | Playback mapping (optional) |
 
-## Quick start
+## Quick start (Python)
 
 ```bash
 cd songs-library/api
@@ -28,6 +28,63 @@ uvicorn app.main:app --reload --port 8100
 ```
 
 Open http://127.0.0.1:8100/
+
+## Quick start (Docker — recommended on your laptop)
+
+Uses SQLite under `songs-library/data/` (no Neon). Requires Docker Desktop.
+
+```powershell
+cd C:\Users\smile\Projects\noverep\songs-library
+
+# Build image + start (background)
+docker compose up -d --build
+
+# Open UI
+start http://127.0.0.1:8100/
+```
+
+### Start / stop / status
+
+```powershell
+cd C:\Users\smile\Projects\noverep\songs-library
+
+# Start (rebuild if code changed)
+docker compose up -d --build
+
+# Stop (keeps data in .\data)
+docker compose down
+
+# Stop without removing the container
+docker compose stop
+
+# Start again without rebuild
+docker compose start
+
+# Logs
+docker compose logs -f
+
+# Status
+docker compose ps
+```
+
+### Export image (save / move to another machine)
+
+```powershell
+cd C:\Users\smile\Projects\noverep\songs-library
+docker compose build
+docker save songs-library:local -o songs-library-local.tar
+
+# On the other machine:
+docker load -i songs-library-local.tar
+docker run -d --name songs-library -p 8100:8100 -v ${PWD}/data:/app/data -e DATABASE_URL=sqlite:////app/data/library.db songs-library:local
+```
+
+Point local NoRepeat API at it:
+
+```
+SONGS_LIBRARY_URL=http://127.0.0.1:8100
+SONGS_LIBRARY_ENABLED=true
+```
 
 Seed later (optional):
 
