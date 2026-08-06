@@ -83,6 +83,44 @@ def classify_page(title: str, html: str = "") -> PageKind:
     return "other"
 
 
+def _strip_wiki_chrome(html: str) -> str:
+    """Remove TemplateStyles / script blocks so CSS never becomes textContent."""
+    text = html or ""
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.I | re.S)
+    return text
+
+
+def _text_from_html_fragment(html: str) -> str:
+    return wiki._clean_cell(re.sub(r"<[^>]+>", " ", html or ""))
+
+
+def _looks_like_css_chrome(name: str) -> bool:
+    """True for TemplateStyles / selector fragments that leaked into credit fields."""
+    low = (name or "").casefold()
+    if not low:
+        return True
+    if ".mw-parser-output" in low:
+        return True
+    if any(ch in name for ch in "{};"):
+        return True
+    if any(
+        tok in low
+        for tok in (
+            "list-style",
+            "line-height",
+            "margin:",
+            "padding:",
+            "margin-bottom",
+        )
+    ):
+        return True
+    # Bare CSS class tokens like ".plainlist"
+    if re.match(r"^\.[\w-]+", name.strip()):
+        return True
+    return False
+
+
 def _split_credit_names(raw: str) -> list[str]:
     text = wiki._clean_cell(raw)
     if not text:
@@ -95,9 +133,72 @@ def _split_credit_names(raw: str) -> list[str]:
         name = re.sub(r"\([^)]*\)", "", name).strip()
         if not name or len(name) < 2:
             continue
+        if _looks_like_css_chrome(name):
+            continue
         if name.casefold() in out_casefold(out):
             continue
         out.append(name)
+    return out
+
+
+def _names_from_credit_html(value_html: str) -> list[str]:
+    """Extract person names from an infobox cell, preferring links / list items."""
+    cleaned = _strip_wiki_chrome(value_html)
+
+    def _extend(names: list[str], fragment: str) -> None:
+        for n in _split_credit_names(_text_from_html_fragment(fragment)):
+            if n.casefold() not in out_casefold(names):
+                names.append(n)
+
+    # Prefer <li> entries (plainlist / hlist cast lists).
+    items = re.findall(r"<li\b[^>]*>(.*?)</li>", cleaned, flags=re.I | re.S)
+    if items:
+        names: list[str] = []
+        for item in items:
+            link_texts = re.findall(r"<a\b[^>]*>(.*?)</a>", item, flags=re.I | re.S)
+            if link_texts:
+                for lt in link_texts:
+                    _extend(names, lt)
+            else:
+                _extend(names, item)
+        if names:
+            return names
+
+    # Prefer wiki article link text (comma-separated cast without <li>).
+    wiki_links = re.findall(
+        r'<a\b[^>]*href="/wiki/[^"]*"[^>]*>(.*?)</a>',
+        cleaned,
+        flags=re.I | re.S,
+    )
+    if wiki_links:
+        names = []
+        for lt in wiki_links:
+            _extend(names, lt)
+        if names:
+            return names
+
+    return _split_credit_names(_text_from_html_fragment(cleaned))
+
+
+def scrub_polluted_credit_names(names: list[str] | None) -> list[str]:
+    """Repair stored credits that concatenated TemplateStyles CSS with names.
+
+    Prefer re-running Wikipedia discover/enrich after the parser fix; this is a
+    best-effort cleanup for already-polluted JSON arrays in the DB.
+    """
+    out: list[str] = []
+    for raw in names or []:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        if ".mw-parser-output" in text.casefold() or "{" in text:
+            # Drop CSS rule blocks, then parse remaining prose as names.
+            text = re.sub(r"\.mw-parser-output[^{]*\{[^}]*\}", " ", text)
+            text = re.sub(r"\{[^}]*\}", " ", text)
+            text = re.sub(r"\.mw-parser-output\S*", " ", text)
+        for n in _split_credit_names(text):
+            if n.casefold() not in out_casefold(out):
+                out.append(n)
     return out
 
 
@@ -132,23 +233,22 @@ def extract_infobox_credits(html: str) -> dict[str, Any]:
             continue
         label = wiki._clean_cell(re.sub(r"<[^>]+>", " ", th.group(1))).casefold()
         value_html = td.group(1)
-        value_text = wiki._clean_cell(re.sub(r"<[^>]+>", " ", value_html))
-        if not label or not value_text:
+        value_text = _text_from_html_fragment(_strip_wiki_chrome(value_html))
+        names = _names_from_credit_html(value_html)
+        if not label or (not value_text and not names):
             continue
         if "directed" in label:
-            credits["directors"] = _split_credit_names(value_text)
+            credits["directors"] = names
         elif label in {"music by", "music", "composer", "score by"} or "music by" in label:
-            names = _split_credit_names(value_text)
             if names:
                 credits["composer_name"] = names[0]
         elif "starring" in label or label == "cast":
-            credits["actors"] = _split_credit_names(value_text)
+            credits["actors"] = names
         elif label in {"release date", "released", "release dates"}:
             credits["release_year"] = wiki._year_from_heading(value_text)
         elif label in {"language", "languages"}:
-            langs = _split_credit_names(value_text)
-            if langs:
-                credits["language"] = langs[0]
+            if names:
+                credits["language"] = names[0]
     return credits
 
 

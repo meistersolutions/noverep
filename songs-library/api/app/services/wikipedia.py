@@ -54,8 +54,12 @@ class _WikiPageParser(HTMLParser):
         self._current_row: list[tuple[str, int, int]] = []
         self._occupancy: list[list[str | None]] = []
         self._row_idx = 0
+        self._skip_data_depth = 0  # ignore <style>/<script> text nodes
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in ("style", "script"):
+            self._skip_data_depth += 1
+            return
         ad = {k: (v or "") for k, v in attrs}
         if tag in ("h2", "h3", "h4") and not self._in_table:
             self._in_heading = True
@@ -86,6 +90,9 @@ class _WikiPageParser(HTMLParser):
                 self._cell_colspan = 1
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in ("style", "script"):
+            self._skip_data_depth = max(0, self._skip_data_depth - 1)
+            return
         if tag in ("h2", "h3", "h4") and self._in_heading:
             heading = _clean_cell("".join(self._heading_parts))
             year = _year_from_heading(heading)
@@ -108,6 +115,8 @@ class _WikiPageParser(HTMLParser):
             self._in_cell = False
 
     def handle_data(self, data: str) -> None:
+        if self._skip_data_depth:
+            return
         if self._in_heading:
             self._heading_parts.append(data)
         elif self._in_cell:

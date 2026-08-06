@@ -6,6 +6,7 @@ from app.services.wiki_crawl import (
     film_page_candidates,
     is_enqueue_worthy,
     is_skippable_title,
+    scrub_polluted_credit_names,
 )
 from app.services.wikipedia import _WikiPageParser, _tables_to_films, _tables_to_works
 
@@ -18,6 +19,22 @@ INFOBOX = """
 <tr><th>Release date</th><td>10 May 1989</td></tr>
 </table>
 <p>Some body text</p>
+"""
+
+# Real Wikipedia TemplateStyles + plainlist markup for Starring (CSS must not leak).
+INFOBOX_PLAINLIST_STYLES = """
+<table class="infobox vevent">
+<tr><th>Directed by</th><td><a href="/wiki/S._A._Chandrasekhar">S. A. Chandrasekhar</a></td></tr>
+<tr><th>Starring</th><td>
+<style data-mw-deduplicate="TemplateStyles:r213468031">.mw-parser-output .plainlist ol,.mw-parser-output .plainlist ul{line-height:inherit;list-style:none;margin:0;padding:0}.mw-parser-output .plainlist ol li,.mw-parser-output .plainlist ul li{margin-bottom:0}</style>
+<div class="plainlist">
+<ul>
+<li><a href="/wiki/R._Sarathkumar" title="R. Sarathkumar">R. Sarathkumar</a></li>
+<li><a href="/wiki/Sukanya_(actress)" title="Sukanya (actress)">Sukanya</a></li>
+</ul>
+</div>
+</td></tr>
+</table>
 """
 
 
@@ -39,6 +56,33 @@ def test_extract_infobox_credits():
     assert credits["composer_name"] == "Ilaiyaraaja"
     assert "Akkineni Nagarjuna" in credits["actors"]
     assert credits["release_year"] == 1989
+
+
+def test_extract_infobox_credits_strips_templatestyles_css():
+    credits = extract_infobox_credits(INFOBOX_PLAINLIST_STYLES)
+    assert credits["directors"] == ["S. A. Chandrasekhar"]
+    assert credits["actors"] == ["R. Sarathkumar", "Sukanya"]
+    joined = " ".join(credits["actors"])
+    assert ".mw-parser-output" not in joined
+    assert "plainlist" not in joined.casefold()
+    assert "list-style" not in joined.casefold()
+
+
+def test_scrub_polluted_credit_names():
+    polluted = [
+        (
+            ".mw-parser-output .plainlist ol, .mw-parser-output .plainlist ul"
+            "{line-height:inherit, list-style:none, margin:0, padding:0}"
+            ".mw-parser-output .plainlist ol li, .mw-parser-output .plainlist ul li"
+            "{margin-bottom:0} R. Sarathkumar Sukanya"
+        )
+    ]
+    cleaned = scrub_polluted_credit_names(polluted)
+    assert cleaned == ["R. Sarathkumar Sukanya"]
+    assert scrub_polluted_credit_names(["Mani Ratnam", "Girija"]) == [
+        "Mani Ratnam",
+        "Girija",
+    ]
 
 
 def test_enqueue_filters():
