@@ -1,4 +1,4 @@
-# Songs Library
+﻿# Songs Library
 
 Standalone song catalog (API + browse UI) that grows via Wikipedia/Wikidata discovery and feeds NoRepeat.
 
@@ -33,6 +33,19 @@ Open http://127.0.0.1:8100/
 
 Uses SQLite under `songs-library/data/` (no Neon). Requires Docker Desktop.
 
+**Easiest on Windows** — from `songs-library/`:
+
+```powershell
+.\start.cmd          # or: .\start.ps1
+# Open UI: http://127.0.0.1:8100/
+
+.\stop.cmd           # or: .\stop.ps1  (keeps data in .\data)
+.\status.cmd         # optional: container status
+.\logs.cmd           # optional: follow logs
+```
+
+Or call Docker Compose directly:
+
 ```powershell
 cd C:\Users\smile\Projects\noverep\songs-library
 
@@ -48,22 +61,18 @@ start http://127.0.0.1:8100/
 ```powershell
 cd C:\Users\smile\Projects\noverep\songs-library
 
-# Start (rebuild if code changed)
+# Scripts (preferred on Windows)
+.\start.ps1
+.\stop.ps1
+.\status.ps1
+.\logs.ps1
+
+# Or Docker Compose directly
 docker compose up -d --build
-
-# Stop (keeps data in .\data)
-docker compose down
-
-# Stop without removing the container
+docker compose down          # keeps data in .\data
 docker compose stop
-
-# Start again without rebuild
 docker compose start
-
-# Logs
 docker compose logs -f
-
-# Status
 docker compose ps
 ```
 
