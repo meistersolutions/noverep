@@ -37,6 +37,29 @@
     <button id="toggle-add" type="button" class="ghost">Add song</button>
   </section>
 
+  <section class="semantic-search" aria-label="Natural language search">
+    <div class="semantic-search-row">
+      <input
+        id="nl-query"
+        type="search"
+        inputmode="search"
+        enterkeyhint="search"
+        placeholder="Natural language — e.g. sad duet from the 90s, rainy romance…"
+        autocomplete="off"
+      />
+      <button id="nl-search" type="button" class="accent">Search</button>
+    </div>
+    <p class="semantic-hint">Uses local embeddings after songs are enriched (lyrics + tags). Configure LLM_BASE_URL (Ollama or OpenAI-compatible).</p>
+  </section>
+
+  <section id="semantic-results" class="semantic-results" hidden>
+    <div class="jobs-head">
+      <h2>Search results</h2>
+      <button id="nl-clear" type="button" class="ghost">Clear</button>
+    </div>
+    <div id="semantic-results-list" class="semantic-results-list"></div>
+  </section>
+
   <section id="add-panel" class="add-panel" hidden>
     <h2>Add song manually</h2>
     <div class="add-grid">
@@ -105,6 +128,22 @@
     </div>
     <div id="workers-status" class="workers-status">
       <p class="meta">Loading worker status…</p>
+    </div>
+  </section>
+
+  <section id="semantic-panel" class="jobs-panel workers-panel">
+    <div class="jobs-head">
+      <div>
+        <h2>Semantic enrichment</h2>
+        <p class="jobs-hint">Lyrics + LLM tags/summaries + local vectors for natural-language search.</p>
+      </div>
+      <div class="workers-actions">
+        <button id="semantic-refresh" type="button" class="ghost">Refresh</button>
+        <button id="semantic-run" type="button" class="accent">Enrich 20</button>
+      </div>
+    </div>
+    <div id="semantic-status" class="workers-status">
+      <p class="meta">Loading enrichment status…</p>
     </div>
   </section>
 

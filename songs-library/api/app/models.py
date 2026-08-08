@@ -43,6 +43,50 @@ class Song(Base):
     )
 
 
+class SongEnrichment(Base):
+    """LLM/lyrics enrichment for natural-language search and tag filters."""
+
+    __tablename__ = "song_enrichments"
+
+    song_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("songs.id"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    lyrics_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lyrics_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    tag_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    vocal: Mapped[str] = mapped_column(String(32), default="unknown")
+    energy: Mapped[str] = mapped_column(String(32), default="medium")
+    tempo_feel: Mapped[str] = mapped_column(String(32), default="mid")
+    role_hints: Mapped[list] = mapped_column(JSON, default=list)
+    embed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_tag: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SongEmbedding(Base):
+    """Local vector store row (cosine search in-process)."""
+
+    __tablename__ = "song_embeddings"
+
+    song_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("songs.id"), primary_key=True
+    )
+    embedding: Mapped[list] = mapped_column(JSON, nullable=False)
+    dims: Mapped[int] = mapped_column(Integer, nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class DiscoverJob(Base):
     __tablename__ = "discover_jobs"
 

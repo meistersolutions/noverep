@@ -54,6 +54,11 @@ const COLUMNS = [
     get: (s) => (s.popularity == null ? "" : String(Math.round(s.popularity))),
   },
   {
+    key: "moods",
+    label: "Tags",
+    get: (s) => (s.moods || []).join(", "),
+  },
+  {
     key: "youtube_view_count",
     label: "YT views",
     get: (s) => {
@@ -636,6 +641,128 @@ async function runResolveBatch() {
   }
 }
 
+function renderSemanticStatus(s) {
+  const host = $("semantic-status");
+  if (!host) return;
+  const llm = s.llm_configured ? "yes" : "no";
+  const enabled = s.semantic_enrich_enabled ? "on" : "off";
+  host.innerHTML = `
+    <div class="workers-metrics">
+      <div class="workers-metric"><span>Ready</span><strong>${Number(s.ready).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>Pending</span><strong>${Number(s.pending).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>No lyrics</span><strong>${Number(s.lyrics_missing).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>Failed</span><strong>${Number(s.failed).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>Vectors</span><strong>${Number(s.embeddings).toLocaleString()}</strong></div>
+      <div class="workers-metric"><span>LLM</span><strong>${llm}</strong></div>
+    </div>
+    <p class="workers-batch">Worker ${enabled}. Enrich pending songs, then use natural-language search above.</p>
+    ${!s.llm_configured ? `<p class="workers-hint">Set LLM_BASE_URL (and optional LLM_API_KEY) — e.g. http://host.docker.internal:11434/v1 for Ollama.</p>` : ""}
+  `;
+}
+
+async function refreshSemanticStatus() {
+  const s = await api("/api/enrich/semantic/status");
+  renderSemanticStatus(s);
+  return s;
+}
+
+async function runSemanticEnrich() {
+  const btn = $("semantic-run");
+  btn.disabled = true;
+  $("status").textContent = "Queueing semantic enrichment…";
+  try {
+    const result = await api("/api/enrich", {
+      method: "POST",
+      body: JSON.stringify({ limit: 20, force: false }),
+    });
+    const batch = result.batch || {};
+    $("status").textContent =
+      `Enrich: queued ${result.queued}, checked ${batch.checked ?? 0}, enriched ${batch.enriched ?? 0}, failed ${batch.failed ?? 0}`;
+    await refreshSemanticStatus();
+  } catch (err) {
+    $("status").textContent = err.message || String(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderSemanticResults(payload) {
+  const panel = $("semantic-results");
+  const list = $("semantic-results-list");
+  if (!panel || !list) return;
+  const results = payload.results || [];
+  if (!results.length) {
+    panel.hidden = false;
+    list.innerHTML = `<p class="meta">No enriched matches for “${escapeHtml(payload.q)}”. Enrich songs first, or try another phrase.</p>`;
+    return;
+  }
+  panel.hidden = false;
+  list.innerHTML = results
+    .map((hit) => {
+      const s = hit.song || {};
+      const tags = (hit.tags || []).map((t) => `<span class="tag-chip">${escapeHtml(t)}</span>`).join("");
+      const summary = hit.summary
+        ? `<p class="semantic-summary">${escapeHtml(hit.summary)}</p>`
+        : "";
+      const meta = [
+        s.movie_name,
+        s.release_year,
+        s.composer_name,
+        hit.vocal,
+        hit.energy,
+      ]
+        .filter(Boolean)
+        .map((x) => escapeHtml(String(x)))
+        .join(" · ");
+      return `
+        <article class="semantic-hit">
+          <div class="semantic-hit-head">
+            <h3>${escapeHtml(s.song_name || "")}</h3>
+            <span class="semantic-score">${Number(hit.score).toFixed(3)}</span>
+          </div>
+          <p class="meta">${meta}</p>
+          <div class="tag-row">${tags}</div>
+          ${summary}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function runNaturalSearch() {
+  const q = ($("nl-query")?.value || "").trim();
+  if (!q) {
+    $("status").textContent = "Enter a natural-language search phrase.";
+    return;
+  }
+  const btn = $("nl-search");
+  if (btn) btn.disabled = true;
+  $("status").textContent = `Searching “${q}”…`;
+  try {
+    const filters = {};
+    if (yearRange.from != null) filters.year_from = yearRange.from;
+    if (yearRange.to != null) filters.year_to = yearRange.to;
+    const payload = await api("/api/search", {
+      method: "POST",
+      body: JSON.stringify({ q, limit: 20, filters }),
+    });
+    renderSemanticResults(payload);
+    $("status").textContent = `${payload.results?.length || 0} results for “${q}”.`;
+  } catch (err) {
+    $("status").textContent = err.message || String(err);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function clearNaturalSearch() {
+  const panel = $("semantic-results");
+  const list = $("semantic-results-list");
+  if (panel) panel.hidden = true;
+  if (list) list.innerHTML = "";
+  if ($("nl-query")) $("nl-query").value = "";
+}
+
 let jobsPollTimer = null;
 function startJobsPolling() {
   if (jobsPollTimer) return;
@@ -757,6 +884,24 @@ $("resolve-refresh")?.addEventListener("click", () => {
   refreshWorkers().catch((e) => ($("status").textContent = e.message));
 });
 $("resolve-run")?.addEventListener("click", runResolveBatch);
+refreshSemanticStatus()
+  .catch((e) => {
+    if ($("semantic-status")) {
+      $("semantic-status").innerHTML = `<p class="meta">Could not load enrichment status: ${escapeHtml(e.message || String(e))}</p>`;
+    }
+  });
+$("semantic-refresh")?.addEventListener("click", () => {
+  refreshSemanticStatus().catch((e) => ($("status").textContent = e.message));
+});
+$("semantic-run")?.addEventListener("click", runSemanticEnrich);
+$("nl-search")?.addEventListener("click", runNaturalSearch);
+$("nl-clear")?.addEventListener("click", clearNaturalSearch);
+$("nl-query")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    runNaturalSearch();
+  }
+});
 refreshJobs()
   .then((jobs) => {
     if (jobs?.some((j) => j.status === "pending" || j.status === "running")) {

@@ -508,3 +508,86 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .wiki-pages-table a:hover { text-decoration: underline; }
 .wiki-pages-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 
+.semantic-search {
+  margin: 0 0 1.25rem;
+}
+.semantic-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.semantic-search-row input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+  font: inherit;
+  padding: 0.75rem 1rem;
+}
+.semantic-search-row input:focus {
+  outline: 1px solid rgba(61, 186, 126, 0.55);
+  border-color: rgba(61, 186, 126, 0.45);
+}
+.semantic-hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.55rem 0 0;
+}
+.semantic-results {
+  margin: 0 0 1.5rem;
+  padding: 1rem 1.15rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.semantic-results-list {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.75rem;
+}
+.semantic-hit {
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  background: #0f1613;
+  border: 1px solid var(--line);
+}
+.semantic-hit-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+.semantic-hit h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.semantic-score {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+.semantic-summary {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+.tag-chip {
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: rgba(61, 186, 126, 0.14);
+  border: 1px solid rgba(61, 186, 126, 0.28);
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+}
+

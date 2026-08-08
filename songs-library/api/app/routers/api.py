@@ -5,7 +5,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import DiscoverJob, Song
+from app.models import DiscoverJob, Song, SongEmbedding, SongEnrichment
 from app.schemas import (
     DiscoverJobOut,
     DiscoverJobPagesOut,
@@ -19,7 +19,13 @@ from app.schemas import (
     ResolveYoutubeRequest,
     ResolveYoutubeResult,
     SampleRequest,
+    SemanticEnrichRequest,
+    SemanticEnrichStatusOut,
+    SemanticSearchHit,
+    SemanticSearchRequest,
+    SemanticSearchResponse,
     SongCreate,
+    SongEnrichmentOut,
     SongOut,
     SongUpdate,
     StatsOut,
@@ -166,6 +172,7 @@ def list_songs(
     composer: str | None = None,
     movie: str | None = None,
     mood: str | None = None,
+    tag: str | None = None,
     year_from: int | None = None,
     year_to: int | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -197,6 +204,13 @@ def list_songs(
         )
     if mood:
         query = query.filter(Song.moods.contains([mood]))
+    if tag:
+        query = query.outerjoin(SongEnrichment, SongEnrichment.song_id == Song.id).filter(
+            or_(
+                SongEnrichment.tags.contains([tag]),
+                Song.moods.contains([tag]),
+            )
+        )
     return (
         query.order_by(Song.composer_name, Song.release_year.desc(), Song.song_name)
         .offset(offset)
@@ -212,6 +226,103 @@ def get_song(song_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Song not found")
     return song
 
+
+@router.get("/songs/{song_id}/enrichment", response_model=SongEnrichmentOut)
+def get_song_enrichment(song_id: str, db: Session = Depends(get_db)):
+    song = db.query(Song).filter(Song.id == song_id).one_or_none()
+    if not song:
+        raise HTTPException(404, "Song not found")
+    row = db.query(SongEnrichment).filter(SongEnrichment.song_id == song_id).one_or_none()
+    has_embedding = (
+        db.query(SongEmbedding.song_id).filter(SongEmbedding.song_id == song_id).first()
+        is not None
+    )
+    if not row:
+        return SongEnrichmentOut(
+            song_id=song_id,
+            status="pending",
+            has_embedding=has_embedding,
+        )
+    return SongEnrichmentOut(
+        song_id=row.song_id,
+        status=row.status,
+        lyrics_source=row.lyrics_source,
+        summary=row.summary,
+        tags=list(row.tags or []),
+        vocal=row.vocal,
+        energy=row.energy,
+        tempo_feel=row.tempo_feel,
+        role_hints=list(row.role_hints or []),
+        model_tag=row.model_tag,
+        error=row.error,
+        enriched_at=row.enriched_at,
+        has_lyrics=bool(row.lyrics_text),
+        has_embedding=has_embedding,
+    )
+
+
+@router.post("/search", response_model=SemanticSearchResponse)
+async def semantic_search(body: SemanticSearchRequest, db: Session = Depends(get_db)):
+    from app.services.llm_client import llm_configured
+    from app.services.vector_search import embed_query, search_songs
+
+    if not llm_configured():
+        raise HTTPException(
+            503,
+            "LLM_BASE_URL is not configured — set it to an OpenAI-compatible endpoint (e.g. Ollama)",
+        )
+    try:
+        query_vec = await embed_query(body.q)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Failed to embed query: {exc}") from exc
+    hits = search_songs(
+        db,
+        query_embedding=query_vec,
+        limit=body.limit,
+        language=body.filters.language,
+        year_from=body.filters.year_from,
+        year_to=body.filters.year_to,
+        tags=body.filters.tags,
+    )
+    results = [
+        SemanticSearchHit(
+            song=song,
+            score=round(float(score), 4),
+            summary=enrichment.summary if enrichment else None,
+            tags=list((enrichment.tags if enrichment else None) or song.moods or []),
+            vocal=enrichment.vocal if enrichment else None,
+            energy=enrichment.energy if enrichment else None,
+            enrichment_status=enrichment.status if enrichment else None,
+        )
+        for song, enrichment, score in hits
+    ]
+    return SemanticSearchResponse(q=body.q, results=results)
+
+
+@router.get("/enrich/semantic/status", response_model=SemanticEnrichStatusOut)
+def semantic_enrich_status(db: Session = Depends(get_db)):
+    from app.services.semantic_enrich import semantic_status
+
+    return SemanticEnrichStatusOut(**semantic_status(db))
+
+
+@router.post("/enrich")
+async def semantic_enrich_enqueue(
+    body: SemanticEnrichRequest,
+    db: Session = Depends(get_db),
+):
+    """Queue songs for semantic enrichment (lyrics + tags + embeddings)."""
+    from app.services.semantic_enrich import enqueue_songs, enrich_batch
+
+    queued = enqueue_songs(
+        db,
+        song_ids=body.song_ids or None,
+        limit=body.limit,
+        force=body.force,
+    )
+    # Opportunistic small run so UI sees progress without waiting for the loop.
+    batch = await enrich_batch(db, limit=min(body.limit, 5))
+    return {**queued, "batch": batch}
 
 @router.post("/songs/{song_id}/resolve-youtube", response_model=SongOut)
 async def resolve_song_youtube(song_id: str, db: Session = Depends(get_db)):
@@ -611,6 +722,22 @@ def sample(body: SampleRequest, db: Session = Depends(get_db)):
     if body.moods:
         for mood in body.moods:
             query = query.filter(Song.moods.contains([mood]))
+    if body.tags:
+        from app.services.tags import MOOD_TAGS, filter_allowed_tags
+
+        tags = filter_allowed_tags(body.tags)
+        if tags:
+            query = query.outerjoin(SongEnrichment, SongEnrichment.song_id == Song.id)
+            for tag in tags:
+                if tag in MOOD_TAGS:
+                    query = query.filter(
+                        or_(
+                            Song.moods.contains([tag]),
+                            SongEnrichment.tags.contains([tag]),
+                        )
+                    )
+                else:
+                    query = query.filter(SongEnrichment.tags.contains([tag]))
     rows = (
         query.order_by(Song.popularity.desc(), Song.release_year.desc(), Song.song_name)
         .limit(body.limit)

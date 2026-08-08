@@ -173,6 +173,10 @@ class SampleRequest(BaseModel):
     composer: str | None = None
     seed: str | None = None
     moods: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Controlled enrichment tags (also matched via songs.moods for mood tags).",
+    )
     languages: list[str] = Field(
         default_factory=list,
         description="Language codes/labels to keep (e.g. tamil, hindi). Empty = any.",
@@ -255,3 +259,68 @@ class PlaylistExportResponse(BaseModel):
     items: list[PlaylistExportItem]
     youtube_watch_url: str | None = None
     video_ids: list[str] = Field(default_factory=list)
+
+
+class SemanticSearchFilters(BaseModel):
+    language: str | None = None
+    year_from: int | None = None
+    year_to: int | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class SemanticSearchRequest(BaseModel):
+    q: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=20, ge=1, le=100)
+    filters: SemanticSearchFilters = Field(default_factory=SemanticSearchFilters)
+
+
+class SemanticSearchHit(BaseModel):
+    song: SongOut
+    score: float
+    summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    vocal: str | None = None
+    energy: str | None = None
+    enrichment_status: str | None = None
+
+
+class SemanticSearchResponse(BaseModel):
+    q: str
+    results: list[SemanticSearchHit]
+
+
+class SongEnrichmentOut(BaseModel):
+    song_id: str
+    status: str
+    lyrics_source: str | None = None
+    summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    vocal: str = "unknown"
+    energy: str = "medium"
+    tempo_feel: str = "mid"
+    role_hints: list[str] = Field(default_factory=list)
+    model_tag: str | None = None
+    error: str | None = None
+    enriched_at: datetime | None = None
+    has_lyrics: bool = False
+    has_embedding: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class SemanticEnrichRequest(BaseModel):
+    song_ids: list[str] = Field(default_factory=list)
+    limit: int = Field(default=50, ge=1, le=200)
+    force: bool = False
+
+
+class SemanticEnrichStatusOut(BaseModel):
+    total_songs: int
+    embeddings: int
+    by_status: dict[str, int] = Field(default_factory=dict)
+    pending: int = 0
+    ready: int = 0
+    lyrics_missing: int = 0
+    failed: int = 0
+    llm_configured: bool = False
+    semantic_enrich_enabled: bool = True

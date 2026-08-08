@@ -408,6 +408,35 @@ async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
             db.close()
 
 
+async def semantic_enrich_loop(stop_event: asyncio.Event) -> None:
+    """Background: lyrics + LLM tags/summary + local embeddings."""
+    import logging
+
+    from app.services import llm_client
+    from app.services.semantic_enrich import enrich_batch
+
+    log = logging.getLogger(__name__)
+    log.info("semantic_enrich_loop_started")
+    while not stop_event.is_set():
+        if not settings.semantic_enrich_enabled or not llm_client.llm_configured():
+            await asyncio.sleep(settings.semantic_enrich_idle_seconds)
+            continue
+        db = SessionLocal()
+        try:
+            result = await enrich_batch(db, limit=settings.semantic_enrich_batch_size)
+            if result.get("checked", 0) == 0:
+                await asyncio.sleep(settings.semantic_enrich_idle_seconds)
+            else:
+                await asyncio.sleep(settings.semantic_enrich_pause_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("semantic_enrich_loop_error")
+            await asyncio.sleep(5)
+        finally:
+            db.close()
+
+
 def start_background_workers() -> None:
     global _stop, _tasks
     import logging
@@ -433,6 +462,7 @@ def start_background_workers() -> None:
         asyncio.create_task(discover_queue_loop(_stop), name="discover-queue"),
         asyncio.create_task(enrich_loop(_stop), name="enrich-loop"),
         asyncio.create_task(youtube_resolve_loop(_stop), name="youtube-resolve"),
+        asyncio.create_task(semantic_enrich_loop(_stop), name="semantic-enrich"),
         asyncio.create_task(noverep_keepalive_loop(_stop), name="noverep-keepalive"),
     ]
     for task in _tasks:

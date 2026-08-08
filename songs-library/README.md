@@ -13,9 +13,31 @@ Standalone song catalog (API + browse UI) that grows via Wikipedia/Wikidata disc
 | singers | List |
 | lyricists | List |
 | popularity | 1–100 |
-| moods | Extensible tags |
+| moods | Extensible tags (mirrored from semantic mood tags) |
 | content_hash | Dedupe fingerprint |
 | youtube_video_id | Playback mapping (optional) |
+
+### Semantic enrichment (local)
+
+| Store | Description |
+|-------|-------------|
+| `song_enrichments` | Lyrics, summary, controlled tags, vocal/energy/tempo, role hints |
+| `song_embeddings` | Embedding vectors in SQLite (cosine search in-process) |
+
+Natural-language search: `POST /api/search` with `{ "q": "sad duet from the 90s" }`.
+
+Configure an OpenAI-compatible LLM + embeddings endpoint (local Ollama recommended):
+
+```powershell
+# songs-library/.env (next to docker-compose.yml)
+LLM_BASE_URL=http://host.docker.internal:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=llama3.2
+EMBEDDING_MODEL=nomic-embed-text
+SEMANTIC_ENRICH_ENABLED=true
+```
+
+Then `ollama pull llama3.2` and `ollama pull nomic-embed-text`, rebuild/restart the container, and use **Enrich 20** on the home page (or wait for the background worker).
 
 ## Quick start (Python)
 
@@ -111,14 +133,18 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 - `GET /api/stats` — counts by composer
 - `GET /api/composers` — composer names with movie/album and song counts
 - Web UI `/composers` — composer names with song counts
-- `GET /api/songs` — list/filter
+- `GET /api/songs` — list/filter (`tag=` for enrichment tags)
+- `GET /api/songs/{id}/enrichment` — tags, summary, status
 - `POST /api/songs` — manual add
 - `PATCH /api/songs/{id}` — update
+- `POST /api/search` — natural-language search over local embeddings
+- `POST /api/enrich` — queue (and opportunistically run) semantic enrichment
+- `GET /api/enrich/semantic/status` — enrichment / vector counts
 - `POST /api/discover` — Wikidata discovery for seeds
 - `POST /api/discover/jobs/{id}/end` — end a running/pending seed and archive it (hides from home list)
 - `POST /api/discover/jobs/{id}/restart` — re-queue a stuck seed (resume film crawl, or `?reset=true` from scratch)
 - `GET /api/discover/jobs` — list discover jobs (archived hidden by default)
-- `POST /api/sample` — unheard batch for NoRepeat queue
+- `POST /api/sample` — unheard batch for NoRepeat queue (`tags` + `moods`)
 - `POST /api/resolve/youtube` — resolve YouTube ids for unmapped songs
   (uses `YOUTUBE_API_KEY` when set; yt-dlp fallback often 403s on Render)
 - `POST /api/playlists/export` — export mapped songs as a YouTube playlist payload

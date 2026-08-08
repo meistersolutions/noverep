@@ -28,6 +28,18 @@ class Settings(BaseSettings):
     # egress driver on the Free 5 GB/month transfer cap.
     enrich_idle_seconds: float = 300.0
     enrich_pause_seconds: float = 5.0
+    # Semantic enrich: lyrics + LLM tags/summary + local embeddings.
+    # Requires an OpenAI-compatible endpoint (Ollama or cloud).
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "llama3.2"
+    embedding_model: str = "nomic-embed-text"
+    semantic_enrich_enabled: bool = True
+    semantic_enrich_batch_size: int = 5
+    semantic_enrich_idle_seconds: float = 60.0
+    semantic_enrich_pause_seconds: float = 3.0
+    lyrics_max_chars: int = 8000
+    embed_lyrics_chars: int = 1500
     youtube_resolve_limit: int = 20
     youtube_resolve_batch_size: int = 10
     youtube_resolve_idle_seconds: float = 300.0
