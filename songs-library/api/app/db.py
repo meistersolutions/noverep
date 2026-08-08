@@ -20,6 +20,9 @@ def _normalize_database_url(url: str) -> str:
 
 DATABASE_URL = _normalize_database_url(settings.database_url)
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+if DATABASE_URL.startswith("sqlite"):
+    # Playwright resolve holds connections longer; avoid immediate lock errors.
+    connect_args["timeout"] = 60
 
 # Small pool + pre-ping: one Render free dyno talking to Neon. Prefer Neon's
 # pooled connection string (*-pooler.*) in DATABASE_URL to cut connection churn.
@@ -35,6 +38,16 @@ if not DATABASE_URL.startswith("sqlite"):
     )
 
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
+
+if DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_on_connect(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.close()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
