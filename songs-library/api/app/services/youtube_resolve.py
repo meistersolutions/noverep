@@ -1,8 +1,8 @@
 """Resolve YouTube video IDs and popularity from view counts.
 
-Prefer the official YouTube Data API when ``YOUTUBE_API_KEY`` is set (works from
-Render datacenter IPs). Fall back to yt-dlp search, which often gets HTTP 403
-from cloud hosts without cookies.
+Prefer the official YouTube Data API when ``YOUTUBE_API_KEY`` is set. Otherwise
+use Playwright Chromium search first (reliable from a residential IP), with
+yt-dlp only as a last-resort backup (often HTTP 403).
 """
 
 from __future__ import annotations
@@ -392,67 +392,64 @@ def _search_youtube_sync(
 ) -> tuple[str | None, int | None]:
     """Return (video_id, view_count) for the first search hit.
 
-    Order: Data API → yt-dlp → Playwright (when enabled and API key unset).
+    Order: Data API → Playwright → yt-dlp (when API key unset).
+    yt-dlp is last because it is blocked most of the time from Docker/home IPs.
     """
     api_hit = _search_via_data_api(query, language=language)
     if api_hit[0]:
         return api_hit
 
-    # When the Data API key is configured, never fall back to yt-dlp / Playwright
-    # from cloud hosts — API miss usually means quota or no results.
+    # When the Data API key is configured, never fall back to browser/yt-dlp —
+    # API miss usually means quota or no results.
     if _data_api_configured():
         return None, None
 
-    ytdlp_blocked = False
-    try:
-        import yt_dlp
-    except ImportError:
-        logger.warning("yt_dlp_not_installed")
-        yt_dlp = None  # type: ignore[assignment]
-
-    if yt_dlp is not None:
-        try:
-            with yt_dlp.YoutubeDL(_ydl_opts(extract_flat=True)) as ydl:
-                info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-                entries = (info or {}).get("entries") or []
-                for entry in entries:
-                    if not entry:
-                        continue
-                    vid = entry.get("id") or ""
-                    if not VIDEO_ID_RE.match(vid):
-                        continue
-                    views = entry.get("view_count")
-                    if not isinstance(views, int) or views <= 0:
-                        # Flat search often omits views — fetch the watch page / API.
-                        views = _fetch_view_count_sync(vid)
-                    _note_ok()
-                    return vid, views if isinstance(views, int) and views > 0 else None
-        except Exception as exc:  # noqa: BLE001
-            if _is_block_error(exc):
-                ytdlp_blocked = True
-                _note_block(str(exc), query=query)
-            logger.warning("youtube_search_failed", extra={"error": str(exc), "query": query})
-
-    # Playwright Chromium — same approach as youtube-csv-mapper. Callers should
-    # only enable this on the primary query (browser search is slow).
+    # Playwright Chromium first (youtube-csv-mapper approach). Prefer this over
+    # yt-dlp which is usually 403-blocked. Callers should only enable on the
+    # primary query (browser search is slower than yt-dlp when it works).
     if allow_playwright and settings.youtube_playwright_fallback:
         from app.services.youtube_playwright import search_youtube_playwright
 
         video_id, views = search_youtube_playwright(query)
         if video_id:
-            if ytdlp_blocked:
-                _note_ok()
+            _note_ok()
             logger.info(
                 "youtube_playwright_hit",
                 extra={"query": query, "video_id": video_id},
             )
             return video_id, views
 
+    try:
+        import yt_dlp
+    except ImportError:
+        logger.warning("yt_dlp_not_installed")
+        return None, None
+
+    try:
+        with yt_dlp.YoutubeDL(_ydl_opts(extract_flat=True)) as ydl:
+            info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+            entries = (info or {}).get("entries") or []
+            for entry in entries:
+                if not entry:
+                    continue
+                vid = entry.get("id") or ""
+                if not VIDEO_ID_RE.match(vid):
+                    continue
+                views = entry.get("view_count")
+                if not isinstance(views, int) or views <= 0:
+                    views = _fetch_view_count_sync(vid)
+                _note_ok()
+                return vid, views if isinstance(views, int) and views > 0 else None
+    except Exception as exc:  # noqa: BLE001
+        if _is_block_error(exc):
+            _note_block(str(exc), query=query)
+        logger.warning("youtube_search_failed", extra={"error": str(exc), "query": query})
+
     return None, None
 
 
 def search_youtube_for_song(song: Song) -> tuple[str | None, int | None]:
-    """Try several query shapes; Playwright only on the primary query."""
+    """Find a video id: Playwright on the primary query, yt-dlp only as backup."""
     queries = build_search_queries(song)
     if not queries:
         return None, None

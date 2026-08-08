@@ -155,8 +155,8 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 Local Docker image installs Playwright + Chromium. Resolve order:
 
 1. YouTube Data API (if `YOUTUBE_API_KEY` is set)
-2. yt-dlp search
-3. Playwright browser search (same approach as `C:\Users\smile\Projects\youtube-csv-mapper`)
+2. **Playwright** browser search (primary when no API key)
+3. yt-dlp search (backup only — often 403-blocked)
 
 Toggle with `YOUTUBE_PLAYWRIGHT_FALLBACK=true|false`. After rebuild, the YouTube
 mapping panel shows a **Playwright** yes/no metric.

@@ -3,6 +3,42 @@
 from app.services import youtube_resolve as yr
 
 
+def test_playwright_preferred_over_ytdlp(monkeypatch):
+    """Playwright runs first; yt-dlp should not be consulted on a hit."""
+    monkeypatch.setattr(yr, "_youtube_api_key", lambda: "")
+    monkeypatch.setattr(yr, "_search_via_data_api", lambda *a, **k: (None, None))
+
+    ytdlp_calls = {"n": 0}
+
+    class TrackingYDL:
+        def __init__(self, *_a, **_k):
+            ytdlp_calls["n"] += 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def extract_info(self, *_a, **_k):
+            return {"entries": [{"id": "xxxxxxxxxxx", "view_count": 1}]}
+
+    import yt_dlp
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", TrackingYDL)
+    monkeypatch.setattr(yr, "_ydl_opts", lambda **k: {})
+    monkeypatch.setattr(
+        "app.services.youtube_playwright.search_youtube_playwright",
+        lambda query: ("dQw4w9WgXcQ", 99),
+    )
+    monkeypatch.setattr(yr.settings, "youtube_playwright_fallback", True)
+
+    vid, views = yr._search_youtube_sync("test song", allow_playwright=True)
+    assert vid == "dQw4w9WgXcQ"
+    assert views == 99
+    assert ytdlp_calls["n"] == 0
+
+
 def test_playwright_used_when_ytdlp_blocked(monkeypatch):
     monkeypatch.setattr(yr, "_youtube_api_key", lambda: "")
     monkeypatch.setattr(yr, "_search_via_data_api", lambda *a, **k: (None, None))

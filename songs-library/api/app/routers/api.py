@@ -640,13 +640,13 @@ def workers_status(db: Session = Depends(get_db)):
         )
     elif not resolve.get("youtube_api_configured") and not pw.get("available"):
         hint = (
-            "No YOUTUBE_API_KEY and Playwright fallback unavailable. "
-            "Set a Data API key, or rebuild with Playwright (Chromium) installed."
+            "No YOUTUBE_API_KEY and Playwright unavailable. "
+            "Rebuild with Playwright Chromium, or set a Data API key."
         )
     elif not resolve.get("youtube_api_configured") and pw.get("available"):
         hint = (
-            "No YOUTUBE_API_KEY — using yt-dlp then Playwright Chromium fallback. "
-            "A Data API key is still faster/more reliable when available."
+            "Mapping with Playwright Chromium (primary). yt-dlp is only a backup. "
+            "Optional: set YOUTUBE_API_KEY for faster Data API searches."
         )
     elif last.get("attempted") and last.get("resolved") == 0 and last.get("failed", 0) > 0:
         hint = (

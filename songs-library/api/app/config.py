@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     youtube_resolve_pause_seconds: float = 15.0
     # Extra sleep after YouTube 403/bot blocks (multiplied by consecutive failures).
     youtube_resolve_403_cooldown_seconds: float = 120.0
-    # Playwright Chromium fallback when Data API is unset and yt-dlp fails/blocks.
+    # Playwright Chromium is the primary finder when Data API is unset.
+    # (Setting name kept for env compatibility; false disables browser search.)
     youtube_playwright_fallback: bool = True
     youtube_playwright_headless: bool = True
     youtube_playwright_open_watch: bool = False
