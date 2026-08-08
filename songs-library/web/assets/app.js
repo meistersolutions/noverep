@@ -403,6 +403,26 @@ function pageListHtml(pages, emptyLabel) {
     .join("")}</ul>`;
 }
 
+function processedPagesHtml(pages) {
+  if (!pages?.length) {
+    return `<p class="meta">No Wikipedia pages recorded yet for this job. Progress appears as the crawler runs.</p>`;
+  }
+  const rows = pages
+    .map((p) => {
+      const href = p.url || wikiUrl(p.title);
+      return `<tr>
+        <td><a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.title)}</a></td>
+        <td>${escapeHtml(p.kind || "other")}</td>
+        <td class="num">${Number(p.songs_fetched || 0)}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<div class="wiki-pages-table-wrap"><table class="wiki-pages-table">
+    <thead><tr><th>Page title</th><th>Category</th><th>Songs</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
 async function openJobDetails(job) {
   $("job-details-status").textContent = `${job.status} · ${job.phase}`;
   $("job-details-title").textContent = job.entity_label || job.seed;
@@ -413,13 +433,10 @@ async function openJobDetails(job) {
   $("job-details").showModal();
   try {
     const pages = await api(`/api/discover/jobs/${encodeURIComponent(job.id)}/pages`);
+    const list = pages.pages || [];
     $("job-details-body").innerHTML = `
-      <h3>Song list / discography pages</h3>
-      ${pageListHtml(pages.wiki_list_pages || [], "No Wikipedia list pages recorded yet for this seed.")}
-      <h3>Filmography source pages</h3>
-      ${pageListHtml(pages.filmography_pages || [], "No filmography pages recorded yet.")}
-      <h3>Film pages scanned for soundtracks</h3>
-      ${pageListHtml(pages.film_pages || [], "No film soundtrack pages recorded yet.")}
+      <h3>Processed Wikipedia pages (${list.length})</h3>
+      ${processedPagesHtml(list)}
       ${job.error ? `<h3>Error</h3><p class="meta">${escapeHtml(job.error)}</p>` : ""}
     `;
   } catch (err) {

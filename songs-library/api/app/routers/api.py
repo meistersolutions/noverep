@@ -327,7 +327,7 @@ def discover_job(job_id: str, db: Session = Depends(get_db)):
     job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
     if not job:
         raise HTTPException(404, "Discover job not found")
-    return serialize_discover_job(job)
+    return serialize_discover_job(job, db)
 
 
 @router.get("/discover/jobs/{job_id}/pages", response_model=DiscoverJobPagesOut)
@@ -336,8 +336,7 @@ def discover_job_pages(job_id: str, db: Session = Depends(get_db)):
     job = db.query(DiscoverJob).filter(DiscoverJob.id == job_id).one_or_none()
     if not job:
         raise HTTPException(404, "Discover job not found")
-    return serialize_discover_job_pages(job)
-
+    return serialize_discover_job_pages(job, db)
 
 @router.post("/discover/jobs/{job_id}/end", response_model=DiscoverJobOut)
 def end_and_archive_discover_job(
@@ -348,7 +347,7 @@ def end_and_archive_discover_job(
     if not job:
         raise HTTPException(404, "Discover job not found")
     if job.status == "archived":
-        return serialize_discover_job(job)
+        return serialize_discover_job(job, db)
     now = datetime.now(timezone.utc)
     was_active = job.status in {"pending", "running"}
     job.status = "archived"
@@ -362,7 +361,7 @@ def end_and_archive_discover_job(
         job.finished_at = now
     db.commit()
     db.refresh(job)
-    return serialize_discover_job(job)
+    return serialize_discover_job(job, db)
 
 
 @router.post("/discover/jobs/{job_id}/restart", response_model=DiscoverJobOut)
@@ -382,7 +381,7 @@ def restart_discover_job(
         raise HTTPException(404, "Discover job not found")
     if job.status == "archived":
         raise HTTPException(400, "Archived jobs cannot be restarted; discover the seed again")
-    return serialize_discover_job(requeue_discover_job(db, job, reset_progress=reset))
+    return serialize_discover_job(requeue_discover_job(db, job, reset_progress=reset), db)
 
 
 @router.get("/discover/jobs", response_model=list[DiscoverJobOut])
@@ -403,7 +402,7 @@ def list_discover_jobs(
         .all()
     )
     if active_only:
-        return [serialize_discover_job(j) for j in active[:limit]]
+        return [serialize_discover_job(j, db) for j in active[:limit]]
     remaining = max(limit - len(active), 0)
     recent: list[DiscoverJob] = []
     if remaining:
@@ -415,7 +414,7 @@ def list_discover_jobs(
         recent = (
             finished_q.order_by(DiscoverJob.created_at.desc()).limit(remaining).all()
         )
-    return [serialize_discover_job(j) for j in (active + recent)]
+    return [serialize_discover_job(j, db) for j in (active + recent)]
 
 
 @router.get("/enrich/status", response_model=EnrichStatusOut)

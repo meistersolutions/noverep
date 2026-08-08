@@ -6,6 +6,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import DiscoverJob
 from app.services.discover import merge_and_upsert_works, resolve_seed_meta
+from app.services.discover_pages import clear_discover_job_pages, upsert_discover_job_page
 from app.services import enrich, wiki_crawl
 from app.services.youtube_resolve import resolve_unmapped, refresh_popularity_from_views
 
@@ -62,6 +63,7 @@ def requeue_discover_job(db: Session, job: DiscoverJob, *, reset_progress: bool 
         job.pages_done = 0
         job.cursor_json = None
         job.message = "Restarted from the beginning by user"
+        clear_discover_job_pages(db, job.id)
     else:
         pages = int((job.cursor_json or {}).get("pages_done") or job.pages_done or 0)
         job.message = (
@@ -141,6 +143,16 @@ async def run_discover_job(job_id: str) -> None:
                 job.skipped = int(job.skipped or 0) + int(stats["skipped"])
                 job.updated = int(job.updated or 0) + int(stats["updated"])
                 job.found = int(job.found or 0) + int(stats["found"])
+            kind = state.get("kind") or ""
+            page = state.get("current_page") or ""
+            if page:
+                upsert_discover_job_page(
+                    db,
+                    job_id=job_id,
+                    page_title=page,
+                    page_kind=kind or "other",
+                    songs_fetched=len(delta),
+                )
             cursor = {
                 "queue": state.get("queue") or [],
                 "seen": state.get("seen") or [],
@@ -153,8 +165,6 @@ async def run_discover_job(job_id: str) -> None:
             }
             job.cursor_json = cursor
             job.pages_done = int(cursor["pages_done"])
-            kind = state.get("kind") or ""
-            page = state.get("current_page") or ""
             job.message = (
                 f"{kind}: {page} "
                 f"(pages {job.pages_done}, inserted {job.inserted})"

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -62,3 +62,22 @@ class DiscoverJob(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DiscoverJobPage(Base):
+    """Audit row for each Wikipedia page processed during a discover job."""
+
+    __tablename__ = "discover_job_pages"
+    __table_args__ = (UniqueConstraint("job_id", "page_title", name="uq_discover_job_page"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("discover_jobs.id"), nullable=False, index=True
+    )
+    page_title: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    page_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="other")
+    page_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    songs_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

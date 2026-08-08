@@ -127,10 +127,19 @@ class DiscoverJobOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DiscoverJobPageOut(BaseModel):
+    title: str
+    kind: str
+    songs_fetched: int = 0
+    url: str
+
+
 class DiscoverJobPagesOut(BaseModel):
     """Fetched only when the portal opens job Details — not on every poll."""
 
     id: str
+    pages: list[DiscoverJobPageOut] = Field(default_factory=list)
+    # Legacy fields kept empty for older clients; prefer `pages`.
     wiki_list_pages: list[str] = Field(default_factory=list)
     filmography_pages: list[str] = Field(default_factory=list)
     film_pages: list[str] = Field(default_factory=list)
