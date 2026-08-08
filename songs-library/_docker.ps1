@@ -1,8 +1,24 @@
 # Shared Docker Desktop helpers for Songs Library scripts.
 
+function Invoke-DockerQuiet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Args
+    )
+    # docker writes connection errors to stderr; with $ErrorActionPreference=Stop
+    # that becomes a terminating NativeCommandError. Keep Continue for the call.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker @Args 1>$null 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 function Test-DockerDaemon {
-    docker info 1>$null 2>$null
-    return ($LASTEXITCODE -eq 0)
+    return (Invoke-DockerQuiet -Args @("info"))
 }
 
 function Get-DockerDesktopPath {
@@ -21,7 +37,7 @@ function Get-DockerDesktopPath {
 
 function Wait-DockerDaemon {
     param(
-        [int]$TimeoutSeconds = 120,
+        [int]$TimeoutSeconds = 180,
         [int]$PollSeconds = 3
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -53,8 +69,8 @@ function Ensure-DockerRunning {
     }
 
     Start-Process -FilePath $desktop | Out-Null
-    Write-Host "Waiting for Docker engine (up to 2 minutes)..."
-    if (-not (Wait-DockerDaemon -TimeoutSeconds 120)) {
+    Write-Host "Waiting for Docker engine (up to 3 minutes)..."
+    if (-not (Wait-DockerDaemon -TimeoutSeconds 180)) {
         Write-Error "Docker Desktop did not become ready in time. Open Docker Desktop, wait until it says Running, then retry .\start.cmd"
         exit 1
     }
