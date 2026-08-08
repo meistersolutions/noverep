@@ -44,8 +44,11 @@ _last_resolve: dict = {
 
 def get_resolve_status() -> dict:
     """Snapshot for the Songs Library portal /ops monitoring."""
+    from app.services.youtube_playwright import playwright_status
+
     return {
         "youtube_api_configured": _data_api_configured(),
+        "playwright": playwright_status(),
         "consecutive_blocks": _consecutive_blocks,
         "block_cooldown_seconds": youtube_block_cooldown_seconds(),
         "last_batch": dict(_last_resolve),
@@ -383,42 +386,64 @@ def _search_youtube_sync(
     *,
     language: str | None = None,
 ) -> tuple[str | None, int | None]:
-    """Return (video_id, view_count) for the first search hit."""
+    """Return (video_id, view_count) for the first search hit.
+
+    Order: Data API → yt-dlp → Playwright (when enabled and API key unset).
+    """
     api_hit = _search_via_data_api(query, language=language)
     if api_hit[0]:
         return api_hit
 
-    # When the Data API key is configured, never fall back to yt-dlp search from
-    # Render/datacenter IPs — it only produces 403 noise and false blocks.
+    # When the Data API key is configured, never fall back to yt-dlp / Playwright
+    # from cloud hosts — API miss usually means quota or no results.
     if _data_api_configured():
         return None, None
 
+    ytdlp_blocked = False
     try:
         import yt_dlp
     except ImportError:
         logger.warning("yt_dlp_not_installed")
-        return None, None
+        yt_dlp = None  # type: ignore[assignment]
 
-    try:
-        with yt_dlp.YoutubeDL(_ydl_opts(extract_flat=True)) as ydl:
-            info = ydl.extract_info(f"ytsearch5:{query}", download=False)
-            entries = (info or {}).get("entries") or []
-            for entry in entries:
-                if not entry:
-                    continue
-                vid = entry.get("id") or ""
-                if not VIDEO_ID_RE.match(vid):
-                    continue
-                views = entry.get("view_count")
-                if not isinstance(views, int) or views <= 0:
-                    # Flat search often omits views — fetch the watch page / API.
-                    views = _fetch_view_count_sync(vid)
+    if yt_dlp is not None:
+        try:
+            with yt_dlp.YoutubeDL(_ydl_opts(extract_flat=True)) as ydl:
+                info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+                entries = (info or {}).get("entries") or []
+                for entry in entries:
+                    if not entry:
+                        continue
+                    vid = entry.get("id") or ""
+                    if not VIDEO_ID_RE.match(vid):
+                        continue
+                    views = entry.get("view_count")
+                    if not isinstance(views, int) or views <= 0:
+                        # Flat search often omits views — fetch the watch page / API.
+                        views = _fetch_view_count_sync(vid)
+                    _note_ok()
+                    return vid, views if isinstance(views, int) and views > 0 else None
+        except Exception as exc:  # noqa: BLE001
+            if _is_block_error(exc):
+                ytdlp_blocked = True
+                _note_block(str(exc), query=query)
+            logger.warning("youtube_search_failed", extra={"error": str(exc), "query": query})
+
+    # Playwright Chromium — same approach as youtube-csv-mapper, used when yt-dlp
+    # is blocked or returns no usable hit.
+    if settings.youtube_playwright_fallback:
+        from app.services.youtube_playwright import search_youtube_playwright
+
+        video_id, views = search_youtube_playwright(query)
+        if video_id:
+            if ytdlp_blocked:
                 _note_ok()
-                return vid, views if isinstance(views, int) and views > 0 else None
-    except Exception as exc:  # noqa: BLE001
-        if _is_block_error(exc):
-            _note_block(str(exc), query=query)
-        logger.warning("youtube_search_failed", extra={"error": str(exc), "query": query})
+            logger.info(
+                "youtube_playwright_hit",
+                extra={"query": query, "video_id": video_id},
+            )
+            return video_id, views
+
     return None, None
 
 

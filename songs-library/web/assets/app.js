@@ -594,12 +594,14 @@ function renderWorkersStatus(w) {
     ? `Last batch (${batch.source || "?"}): attempted ${batch.attempted}, resolved ${batch.resolved}, failed ${batch.failed} · ${new Date(batch.at).toLocaleString()}`
     : "No resolve batch recorded yet since last deploy (worker may still be starting).";
   const apiLabel = w.youtube_api_configured ? "yes" : "no";
+  const pwLabel = w.playwright_available ? "yes" : (w.playwright_fallback ? "no" : "off");
   host.innerHTML = `
     <div class="workers-metrics">
       <div class="workers-metric"><span>Mapped</span><strong>${Number(w.mapped).toLocaleString()}</strong></div>
       <div class="workers-metric"><span>Unmapped</span><strong>${Number(w.metadata_only).toLocaleString()}</strong></div>
       <div class="workers-metric"><span>Mapped %</span><strong>${w.mapped_pct}%</strong></div>
       <div class="workers-metric"><span>API key</span><strong>${apiLabel}</strong></div>
+      <div class="workers-metric"><span>Playwright</span><strong>${pwLabel}</strong></div>
       <div class="workers-metric"><span>Blocks</span><strong>${w.consecutive_blocks}</strong></div>
     </div>
     <p class="workers-batch">${batchLine}</p>

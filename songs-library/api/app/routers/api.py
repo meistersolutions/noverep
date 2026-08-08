@@ -629,6 +629,7 @@ def workers_status(db: Session = Depends(get_db)):
     )
     resolve = get_resolve_status()
     last = resolve.get("last_batch") or {}
+    pw = resolve.get("playwright") or {}
     runtime = worker_runtime_status()
     pct = round(100.0 * mapped / total, 2) if total else 0.0
     hint = ""
@@ -637,8 +638,16 @@ def workers_status(db: Session = Depends(get_db)):
             "Background workers are not running — restart Songs Library "
             "(./stop.cmd then ./start.cmd). Pending discover jobs will sit forever until then."
         )
-    elif not resolve.get("youtube_api_configured"):
-        hint = "Set YOUTUBE_API_KEY (optional for discover; needed for YouTube mapping)."
+    elif not resolve.get("youtube_api_configured") and not pw.get("available"):
+        hint = (
+            "No YOUTUBE_API_KEY and Playwright fallback unavailable. "
+            "Set a Data API key, or rebuild with Playwright (Chromium) installed."
+        )
+    elif not resolve.get("youtube_api_configured") and pw.get("available"):
+        hint = (
+            "No YOUTUBE_API_KEY — using yt-dlp then Playwright Chromium fallback. "
+            "A Data API key is still faster/more reliable when available."
+        )
     elif last.get("attempted") and last.get("resolved") == 0 and last.get("failed", 0) > 0:
         hint = (
             "Last batch resolved 0 — check logs for youtube_data_api_* "
@@ -655,6 +664,8 @@ def workers_status(db: Session = Depends(get_db)):
         metadata_only=int(meta),
         mapped_pct=pct,
         youtube_api_configured=bool(resolve.get("youtube_api_configured")),
+        playwright_fallback=bool(pw.get("enabled")),
+        playwright_available=bool(pw.get("available")),
         consecutive_blocks=int(resolve.get("consecutive_blocks") or 0),
         block_cooldown_seconds=float(resolve.get("block_cooldown_seconds") or 0),
         last_resolve_batch=last if last.get("at") else None,

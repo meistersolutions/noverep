@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     youtube_resolve_pause_seconds: float = 15.0
     # Extra sleep after YouTube 403/bot blocks (multiplied by consecutive failures).
     youtube_resolve_403_cooldown_seconds: float = 120.0
+    # Playwright Chromium fallback when Data API is unset and yt-dlp fails/blocks.
+    youtube_playwright_fallback: bool = True
+    youtube_playwright_headless: bool = True
+    youtube_playwright_open_watch: bool = True
+    youtube_playwright_timeout_seconds: float = 90.0
     discover_queue_idle_seconds: float = 5.0
     # Set BACKGROUND_WORKERS_ENABLED=false on Render to stop all DB loops
     # (use when Neon transfer is exhausted / recovering).

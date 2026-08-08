@@ -158,6 +158,8 @@ class WorkerStatusOut(BaseModel):
     metadata_only: int
     mapped_pct: float
     youtube_api_configured: bool
+    playwright_fallback: bool = False
+    playwright_available: bool = False
     consecutive_blocks: int
     block_cooldown_seconds: float
     last_resolve_batch: dict | None = None

@@ -146,8 +146,20 @@ curl -X POST http://127.0.0.1:8100/api/discover \
 - `GET /api/discover/jobs` — list discover jobs (archived hidden by default)
 - `POST /api/sample` — unheard batch for NoRepeat queue (`tags` + `moods`)
 - `POST /api/resolve/youtube` — resolve YouTube ids for unmapped songs
-  (uses `YOUTUBE_API_KEY` when set; yt-dlp fallback often 403s on Render)
+  (uses `YOUTUBE_API_KEY` when set; otherwise yt-dlp, then **Playwright Chromium**
+  fallback adapted from `youtube-csv-mapper`)
 - `POST /api/playlists/export` — export mapped songs as a YouTube playlist payload
+
+### YouTube mapping without an API key
+
+Local Docker image installs Playwright + Chromium. Resolve order:
+
+1. YouTube Data API (if `YOUTUBE_API_KEY` is set)
+2. yt-dlp search
+3. Playwright browser search (same approach as `C:\Users\smile\Projects\youtube-csv-mapper`)
+
+Toggle with `YOUTUBE_PLAYWRIGHT_FALLBACK=true|false`. After rebuild, the YouTube
+mapping panel shows a **Playwright** yes/no metric.
 
 ## NoRepeat
 
