@@ -153,6 +153,11 @@ class WorkerStatusOut(BaseModel):
     block_cooldown_seconds: float
     last_resolve_batch: dict | None = None
     hint: str = ""
+    background_workers_enabled: bool = True
+    worker_tasks_alive: int = 0
+    worker_tasks: list[dict] = Field(default_factory=list)
+    active_discover_jobs: list[str] = Field(default_factory=list)
+    pending_discover_jobs: int = 0
 
 
 class SampleRequest(BaseModel):

@@ -503,21 +503,35 @@ def enrich_status(db: Session = Depends(get_db)):
 @router.get("/workers/status", response_model=WorkerStatusOut)
 def workers_status(db: Session = Depends(get_db)):
     """Mapped backlog + last YouTube resolve batch (for the portal)."""
+    from app.services.worker import worker_runtime_status
+
     total = db.query(func.count(Song.id)).scalar() or 0
     mapped = db.query(func.count(Song.id)).filter(Song.playability == "mapped").scalar() or 0
     meta = (
         db.query(func.count(Song.id)).filter(Song.playability == "metadata_only").scalar()
         or 0
     )
+    pending = (
+        db.query(func.count(DiscoverJob.id))
+        .filter(DiscoverJob.status == "pending")
+        .scalar()
+        or 0
+    )
     resolve = get_resolve_status()
     last = resolve.get("last_batch") or {}
+    runtime = worker_runtime_status()
     pct = round(100.0 * mapped / total, 2) if total else 0.0
     hint = ""
-    if not resolve.get("youtube_api_configured"):
-        hint = "Set YOUTUBE_API_KEY on this Render service."
+    if runtime["alive_count"] == 0 and runtime["enabled"]:
+        hint = (
+            "Background workers are not running — restart Songs Library "
+            "(./stop.cmd then ./start.cmd). Pending discover jobs will sit forever until then."
+        )
+    elif not resolve.get("youtube_api_configured"):
+        hint = "Set YOUTUBE_API_KEY (optional for discover; needed for YouTube mapping)."
     elif last.get("attempted") and last.get("resolved") == 0 and last.get("failed", 0) > 0:
         hint = (
-            "Last batch resolved 0 — check Render logs for youtube_data_api_* "
+            "Last batch resolved 0 — check logs for youtube_data_api_* "
             "(quotaExceeded / empty search). Free API quota is ~100 searches/day."
         )
     elif meta > mapped * 10:
@@ -535,6 +549,11 @@ def workers_status(db: Session = Depends(get_db)):
         block_cooldown_seconds=float(resolve.get("block_cooldown_seconds") or 0),
         last_resolve_batch=last if last.get("at") else None,
         hint=hint,
+        background_workers_enabled=bool(runtime["enabled"]),
+        worker_tasks_alive=int(runtime["alive_count"]),
+        worker_tasks=list(runtime["tasks"]),
+        active_discover_jobs=list(runtime["active_discover_jobs"]),
+        pending_discover_jobs=int(pending),
     )
 
 

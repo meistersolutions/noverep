@@ -220,91 +220,6 @@ async def run_discover_job(job_id: str) -> None:
         db.close()
 
 
-async def enrich_loop(stop_event: asyncio.Event) -> None:
-    """Background thread: keep filling missing singers/lyricists."""
-    while not stop_event.is_set():
-        db = SessionLocal()
-        try:
-            result = await enrich.enrich_batch(db, limit=settings.enrich_batch_size)
-            if result["checked"] == 0:
-                await asyncio.sleep(settings.enrich_idle_seconds)
-            else:
-                await asyncio.sleep(settings.enrich_pause_seconds)
-        except Exception:  # noqa: BLE001
-            await asyncio.sleep(5)
-        finally:
-            db.close()
-
-
-async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
-    """Background: map unmapped songs, then refresh popularity from YouTube views."""
-    from app.services.youtube_resolve import youtube_block_cooldown_seconds
-
-    while not stop_event.is_set():
-        db = SessionLocal()
-        try:
-            result = await resolve_unmapped(
-                db,
-                limit=settings.youtube_resolve_batch_size,
-                dry_run=False,
-                source="background",
-            )
-            if result.attempted == 0:
-                stats = await refresh_popularity_from_views(
-                    db,
-                    limit=settings.youtube_resolve_batch_size,
-                    force=False,
-                )
-                if stats["attempted"] == 0:
-                    await asyncio.sleep(settings.youtube_resolve_idle_seconds)
-                else:
-                    await asyncio.sleep(settings.youtube_resolve_pause_seconds)
-            else:
-                pause = settings.youtube_resolve_pause_seconds
-                # If the whole batch failed, YouTube is likely blocking this host.
-                if result.resolved == 0 and result.failed > 0:
-                    pause = max(pause, youtube_block_cooldown_seconds())
-                await asyncio.sleep(pause)
-        except Exception:  # noqa: BLE001
-            await asyncio.sleep(5)
-        finally:
-            db.close()
-
-
-async def discover_queue_loop(stop_event: asyncio.Event) -> None:
-    """Pick pending discover jobs and run them continuously."""
-    # First tick: reclaim jobs left running after the last Render sleep/deploy.
-    db = SessionLocal()
-    try:
-        n = reclaim_orphaned_running_jobs(db)
-        if n:
-            import logging
-
-            logging.getLogger(__name__).warning("reclaimed_orphaned_discover_jobs", extra={"count": n})
-    finally:
-        db.close()
-
-    while not stop_event.is_set():
-        db = SessionLocal()
-        job_id = None
-        try:
-            reclaim_orphaned_running_jobs(db)
-            job = (
-                db.query(DiscoverJob)
-                .filter(DiscoverJob.status == "pending")
-                .order_by(DiscoverJob.created_at.asc())
-                .first()
-            )
-            if job:
-                job_id = job.id
-        finally:
-            db.close()
-        if job_id:
-            await run_discover_job(job_id)
-        else:
-            await asyncio.sleep(max(5.0, float(settings.discover_queue_idle_seconds)))
-
-
 async def noverep_keepalive_loop(stop_event: asyncio.Event) -> None:
     """Ping NoRepeat while Songs Library is awake (mutual free-tier keepalive)."""
     import logging
@@ -335,16 +250,173 @@ _stop: asyncio.Event | None = None
 _tasks: list[asyncio.Task] = []
 
 
+def worker_runtime_status() -> dict:
+    """Inspect in-process background tasks (for portal / debugging stuck queues)."""
+    tasks_out: list[dict] = []
+    for task in _tasks:
+        info: dict = {
+            "name": task.get_name(),
+            "done": task.done(),
+            "cancelled": task.cancelled(),
+        }
+        if task.done() and not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                info["exception"] = f"{type(exc).__name__}: {exc}"
+        tasks_out.append(info)
+    return {
+        "enabled": bool(settings.background_workers_enabled),
+        "task_count": len(_tasks),
+        "alive_count": sum(1 for t in _tasks if not t.done()),
+        "tasks": tasks_out,
+        "active_discover_jobs": sorted(_active_job_ids),
+    }
+
+
+def _log_task_done(task: asyncio.Task) -> None:
+    import logging
+
+    log = logging.getLogger(__name__)
+    name = task.get_name()
+    if task.cancelled():
+        log.warning("background_worker_cancelled name=%s", name)
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.exception("background_worker_crashed name=%s", name, exc_info=exc)
+    else:
+        log.info("background_worker_exited name=%s", name)
+
+
+async def discover_queue_loop(stop_event: asyncio.Event) -> None:
+    """Pick pending discover jobs and run them continuously."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    log.info("discover_queue_loop_started")
+    # First tick: reclaim jobs left running after the last Render sleep/deploy.
+    db = SessionLocal()
+    try:
+        n = reclaim_orphaned_running_jobs(db)
+        if n:
+            log.warning("reclaimed_orphaned_discover_jobs count=%s", n)
+    except Exception:  # noqa: BLE001
+        log.exception("discover_queue_reclaim_failed")
+    finally:
+        db.close()
+
+    while not stop_event.is_set():
+        job_id = None
+        try:
+            db = SessionLocal()
+            try:
+                reclaim_orphaned_running_jobs(db)
+                job = (
+                    db.query(DiscoverJob)
+                    .filter(DiscoverJob.status == "pending")
+                    .order_by(DiscoverJob.created_at.asc())
+                    .first()
+                )
+                if job:
+                    job_id = job.id
+                    log.info("discover_queue_claim job_id=%s seed=%s", job_id, job.seed)
+            finally:
+                db.close()
+            if job_id:
+                await run_discover_job(job_id)
+            else:
+                await asyncio.sleep(max(2.0, float(settings.discover_queue_idle_seconds)))
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("discover_queue_loop_error")
+            await asyncio.sleep(5.0)
+
+
+async def enrich_loop(stop_event: asyncio.Event) -> None:
+    """Background thread: keep filling missing singers/lyricists."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    log.info("enrich_loop_started")
+    while not stop_event.is_set():
+        db = SessionLocal()
+        try:
+            result = await enrich.enrich_batch(db, limit=settings.enrich_batch_size)
+            if result["checked"] == 0:
+                await asyncio.sleep(settings.enrich_idle_seconds)
+            else:
+                await asyncio.sleep(settings.enrich_pause_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("enrich_loop_error")
+            await asyncio.sleep(5)
+        finally:
+            db.close()
+
+
+async def youtube_resolve_loop(stop_event: asyncio.Event) -> None:
+    """Background: map unmapped songs, then refresh popularity from YouTube views."""
+    import logging
+
+    from app.services.youtube_resolve import youtube_block_cooldown_seconds
+
+    log = logging.getLogger(__name__)
+    log.info("youtube_resolve_loop_started")
+    while not stop_event.is_set():
+        db = SessionLocal()
+        try:
+            result = await resolve_unmapped(
+                db,
+                limit=settings.youtube_resolve_batch_size,
+                dry_run=False,
+                source="background",
+            )
+            if result.attempted == 0:
+                stats = await refresh_popularity_from_views(
+                    db,
+                    limit=settings.youtube_resolve_batch_size,
+                    force=False,
+                )
+                if stats["attempted"] == 0:
+                    await asyncio.sleep(settings.youtube_resolve_idle_seconds)
+                else:
+                    await asyncio.sleep(settings.youtube_resolve_pause_seconds)
+            else:
+                pause = settings.youtube_resolve_pause_seconds
+                # If the whole batch failed, YouTube is likely blocking this host.
+                if result.resolved == 0 and result.failed > 0:
+                    pause = max(pause, youtube_block_cooldown_seconds())
+                await asyncio.sleep(pause)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("youtube_resolve_loop_error")
+            await asyncio.sleep(5)
+        finally:
+            db.close()
+
+
 def start_background_workers() -> None:
     global _stop, _tasks
+    import logging
+
+    log = logging.getLogger(__name__)
+    # Drop finished/crashed tasks so a restart can recreate them.
+    _tasks = [t for t in _tasks if not t.done()]
     if _tasks:
+        log.info("background_workers_already_running count=%s", len(_tasks))
         return
     if not settings.background_workers_enabled:
-        import logging
-
-        logging.getLogger(__name__).warning(
+        log.warning(
             "background_workers_disabled — set BACKGROUND_WORKERS_ENABLED=true to resume"
         )
+        return
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        log.error("background_workers_skipped — no running event loop at startup")
         return
     _stop = asyncio.Event()
     _tasks = [
@@ -353,6 +425,9 @@ def start_background_workers() -> None:
         asyncio.create_task(youtube_resolve_loop(_stop), name="youtube-resolve"),
         asyncio.create_task(noverep_keepalive_loop(_stop), name="noverep-keepalive"),
     ]
+    for task in _tasks:
+        task.add_done_callback(_log_task_done)
+    log.info("background_workers_started count=%s", len(_tasks))
 
 
 def stop_background_workers() -> None:
