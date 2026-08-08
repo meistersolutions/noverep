@@ -41,6 +41,9 @@ _last_resolve: dict = {
     "failed": 0,
 }
 
+# Only one resolve batch at a time (manual + background worker share this).
+_resolve_lock = asyncio.Lock()
+
 
 def get_resolve_status() -> dict:
     """Snapshot for the Songs Library portal /ops monitoring."""
@@ -531,17 +534,40 @@ async def resolve_unmapped(
     dry_run: bool = False,
     source: str = "manual",
 ) -> ResolveYoutubeResult:
+    async with _resolve_lock:
+        return await _resolve_unmapped_locked(
+            db,
+            limit=limit,
+            composer=composer,
+            dry_run=dry_run,
+            source=source,
+        )
+
+
+async def _resolve_unmapped_locked(
+    db: Session,
+    *,
+    limit: int | None = None,
+    composer: str | None = None,
+    dry_run: bool = False,
+    source: str = "manual",
+) -> ResolveYoutubeResult:
     limit = limit or settings.youtube_resolve_limit
     query = db.query(Song).filter(Song.youtube_video_id.is_(None))
     if composer:
         query = query.filter(Song.composer_name.ilike(f"%{composer}%"))
     songs = query.order_by(Song.popularity.desc()).limit(limit).all()
 
+    # Detach before slow Playwright/yt-dlp work so this session holds no locks.
+    for song in songs:
+        db.expunge(song)
+
     resolved = 0
     failed = 0
     updated: list[Song] = []
 
     for song in songs:
+        song_id = song.id
         video_id, views = await asyncio.to_thread(search_youtube_for_song, song)
         if not video_id:
             failed += 1
@@ -550,23 +576,7 @@ async def resolve_unmapped(
             if cooldown >= settings.youtube_resolve_403_cooldown_seconds:
                 await asyncio.sleep(min(cooldown, 30.0))
             continue
-        if not dry_run:
-            apply_youtube_stats(song, video_id=video_id, views=views)
-            # Commit per song — Playwright searches are slow and other workers
-            # would otherwise hit SQLite "database is locked".
-            try:
-                db.commit()
-                db.refresh(song)
-                updated.append(song)
-                resolved += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "youtube_resolve_commit_failed",
-                    extra={"error": str(exc), "song_id": song.id},
-                )
-                db.rollback()
-                failed += 1
-        else:
+        if dry_run:
             song.youtube_video_id = video_id
             if views is not None:
                 song.youtube_view_count = views
@@ -575,6 +585,31 @@ async def resolve_unmapped(
                     song.popularity = score
             updated.append(song)
             resolved += 1
+            await asyncio.sleep(0.35)
+            continue
+
+        row = db.query(Song).filter(Song.id == song_id).one_or_none()
+        if not row:
+            failed += 1
+            continue
+        if row.youtube_video_id:
+            # Another worker mapped it while we searched.
+            updated.append(row)
+            resolved += 1
+            continue
+        apply_youtube_stats(row, video_id=video_id, views=views)
+        try:
+            db.commit()
+            db.refresh(row)
+            updated.append(row)
+            resolved += 1
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            logger.warning(
+                "youtube_resolve_commit_failed",
+                extra={"error": str(exc), "song_id": song_id},
+            )
+            failed += 1
         await asyncio.sleep(0.35)
 
     _record_resolve_batch(
