@@ -388,6 +388,7 @@ def _search_youtube_sync(
     query: str,
     *,
     language: str | None = None,
+    allow_playwright: bool = True,
 ) -> tuple[str | None, int | None]:
     """Return (video_id, view_count) for the first search hit.
 
@@ -432,9 +433,9 @@ def _search_youtube_sync(
                 _note_block(str(exc), query=query)
             logger.warning("youtube_search_failed", extra={"error": str(exc), "query": query})
 
-    # Playwright Chromium — same approach as youtube-csv-mapper, used when yt-dlp
-    # is blocked or returns no usable hit.
-    if settings.youtube_playwright_fallback:
+    # Playwright Chromium — same approach as youtube-csv-mapper. Callers should
+    # only enable this on the primary query (browser search is slow).
+    if allow_playwright and settings.youtube_playwright_fallback:
         from app.services.youtube_playwright import search_youtube_playwright
 
         video_id, views = search_youtube_playwright(query)
@@ -451,9 +452,16 @@ def _search_youtube_sync(
 
 
 def search_youtube_for_song(song: Song) -> tuple[str | None, int | None]:
-    """Try several query shapes via the Data API before giving up."""
-    for query in build_search_queries(song):
-        video_id, views = _search_youtube_sync(query, language=song.language)
+    """Try several query shapes; Playwright only on the primary query."""
+    queries = build_search_queries(song)
+    if not queries:
+        return None, None
+    for idx, query in enumerate(queries):
+        video_id, views = _search_youtube_sync(
+            query,
+            language=song.language,
+            allow_playwright=(idx == 0),
+        )
         if video_id:
             return video_id, views
     return None, None

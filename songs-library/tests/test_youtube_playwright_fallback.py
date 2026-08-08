@@ -30,9 +30,43 @@ def test_playwright_used_when_ytdlp_blocked(monkeypatch):
     )
     monkeypatch.setattr(yr.settings, "youtube_playwright_fallback", True)
 
-    vid, views = yr._search_youtube_sync("test song movie composer")
+    vid, views = yr._search_youtube_sync("test song movie composer", allow_playwright=True)
     assert vid == "dQw4w9WgXcQ"
     assert views == 12345
+
+
+def test_playwright_skipped_on_secondary_query(monkeypatch):
+    monkeypatch.setattr(yr, "_youtube_api_key", lambda: "")
+    monkeypatch.setattr(yr, "_search_via_data_api", lambda *a, **k: (None, None))
+    monkeypatch.setattr(yr, "_ydl_opts", lambda **k: {})
+
+    class EmptyYDL:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def extract_info(self, *_a, **_k):
+            return {"entries": []}
+
+    import yt_dlp
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", EmptyYDL)
+    called = {"n": 0}
+
+    def pw(_q):
+        called["n"] += 1
+        return ("dQw4w9WgXcQ", 1)
+
+    monkeypatch.setattr("app.services.youtube_playwright.search_youtube_playwright", pw)
+    monkeypatch.setattr(yr.settings, "youtube_playwright_fallback", True)
+    vid, _views = yr._search_youtube_sync("secondary", allow_playwright=False)
+    assert vid is None
+    assert called["n"] == 0
 
 
 def test_playwright_skipped_when_data_api_configured(monkeypatch):
