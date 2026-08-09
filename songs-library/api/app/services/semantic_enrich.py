@@ -22,6 +22,14 @@ from app.services.tags import (
 )
 from app.services.vector_search import build_embed_text
 
+
+def _commit(db: Session) -> None:
+    from app.services.db_lock import sqlite_write
+
+    with sqlite_write():
+        _commit(db)
+
+
 CLASSIFY_SYSTEM = f"""You classify film/soundtrack songs for a music catalog.
 Return ONLY a JSON object with keys:
 - summary: 1-2 sentences describing mood and theme
@@ -81,7 +89,7 @@ def enqueue_songs(
             row.status = "pending"
             row.error = None
             queued += 1
-    db.commit()
+    _commit(db)
     return {"queued": queued, "requested": len(songs)}
 
 
@@ -133,7 +141,7 @@ async def enrich_one_song(db: Session, song: Song) -> SongEnrichment:
     if not llm_client.llm_configured():
         row.status = "failed"
         row.error = "LLM_BASE_URL is not configured"
-        db.commit()
+        _commit(db)
         db.refresh(row)
         return row
 
@@ -172,7 +180,7 @@ async def enrich_one_song(db: Session, song: Song) -> SongEnrichment:
         row.error = f"llm: {exc}"
         row.lyrics_text = lyrics_text
         row.lyrics_source = lyrics_source
-        db.commit()
+        _commit(db)
         db.refresh(row)
         return row
 
@@ -212,7 +220,7 @@ async def enrich_one_song(db: Session, song: Song) -> SongEnrichment:
         row.lyrics_source = lyrics_source
         row.embed_text = embed_doc
         row.model_tag = model_tag
-        db.commit()
+        _commit(db)
         db.refresh(row)
         return row
 
@@ -248,7 +256,7 @@ async def enrich_one_song(db: Session, song: Song) -> SongEnrichment:
         emb.dims = len(vector)
         emb.model = settings.embedding_model
 
-    db.commit()
+    _commit(db)
     db.refresh(row)
     return row
 

@@ -347,9 +347,14 @@ async def enrich_loop(stop_event: asyncio.Event) -> None:
     """Background thread: keep filling missing singers/lyricists."""
     import logging
 
+    from app.services.youtube_resolve import is_resolve_busy
+
     log = logging.getLogger(__name__)
     log.info("enrich_loop_started")
     while not stop_event.is_set():
+        if is_resolve_busy():
+            await asyncio.sleep(2.0)
+            continue
         db = SessionLocal()
         try:
             result = await enrich.enrich_batch(db, limit=settings.enrich_batch_size)
@@ -414,10 +419,14 @@ async def semantic_enrich_loop(stop_event: asyncio.Event) -> None:
 
     from app.services import llm_client
     from app.services.semantic_enrich import enrich_batch
+    from app.services.youtube_resolve import is_resolve_busy
 
     log = logging.getLogger(__name__)
     log.info("semantic_enrich_loop_started")
     while not stop_event.is_set():
+        if is_resolve_busy():
+            await asyncio.sleep(2.0)
+            continue
         if not settings.semantic_enrich_enabled or not llm_client.llm_configured():
             await asyncio.sleep(settings.semantic_enrich_idle_seconds)
             continue

@@ -292,5 +292,8 @@ async def enrich_batch(db: Session, *, limit: int = 20) -> dict[str, int]:
             song.extra = extra
         await asyncio.sleep(0.35)
 
-    db.commit()
+    from app.services.db_lock import sqlite_write
+
+    with sqlite_write():
+        db.commit()
     return {"checked": checked, "updated": updated}

@@ -506,6 +506,55 @@ def apply_youtube_stats(song: Song, *, video_id: str, views: int | None) -> None
             song.popularity = score
 
 
+def is_resolve_busy() -> bool:
+    """True while a resolve batch holds the asyncio lock (other writers should pause)."""
+    return _resolve_lock.locked()
+
+
+def _persist_youtube_mapping(song_id: str, video_id: str, views: int | None) -> Song | None:
+    """Write mapping in a short-lived session with retries (SQLite lock safe)."""
+    import time
+
+    from sqlalchemy.exc import OperationalError
+
+    from app.db import SessionLocal
+    from app.services.db_lock import sqlite_write
+
+    last_err: Exception | None = None
+    for attempt in range(10):
+        session = SessionLocal()
+        try:
+            with sqlite_write():
+                row = session.query(Song).filter(Song.id == song_id).one_or_none()
+                if not row:
+                    return None
+                if row.youtube_video_id:
+                    session.expunge(row)
+                    return row
+                apply_youtube_stats(row, video_id=video_id, views=views)
+                session.commit()
+                session.refresh(row)
+                session.expunge(row)
+                return row
+        except OperationalError as exc:
+            session.rollback()
+            last_err = exc
+            if "locked" not in str(exc).casefold():
+                raise
+            time.sleep(min(8.0, 0.2 * (2**attempt)))
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    logger.warning(
+        "youtube_resolve_commit_failed",
+        extra={"error": str(last_err), "song_id": song_id},
+    )
+    return None
+
+
 async def resolve_one_song(db: Session, song: Song) -> Song | None:
     """Resolve YouTube id (if needed) and set popularity from view count."""
     video_id = song.youtube_video_id
@@ -593,28 +642,12 @@ async def _resolve_unmapped_locked(
             await asyncio.sleep(0.35)
             continue
 
-        row = db.query(Song).filter(Song.id == song_id).one_or_none()
-        if not row:
+        row = await asyncio.to_thread(_persist_youtube_mapping, song_id, video_id, views)
+        if row is None:
             failed += 1
-            continue
-        if row.youtube_video_id:
-            # Another worker mapped it while we searched.
+        else:
             updated.append(row)
             resolved += 1
-            continue
-        apply_youtube_stats(row, video_id=video_id, views=views)
-        try:
-            db.commit()
-            db.refresh(row)
-            updated.append(row)
-            resolved += 1
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            logger.warning(
-                "youtube_resolve_commit_failed",
-                extra={"error": str(exc), "song_id": song_id},
-            )
-            failed += 1
         await asyncio.sleep(0.35)
 
     _record_resolve_batch(
