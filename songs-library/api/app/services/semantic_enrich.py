@@ -27,7 +27,7 @@ def _commit(db: Session) -> None:
     from app.services.db_lock import sqlite_write
 
     with sqlite_write():
-        _commit(db)
+        db.commit()
 
 
 CLASSIFY_SYSTEM = f"""You classify film/soundtrack songs for a music catalog.
